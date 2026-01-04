@@ -14,7 +14,6 @@ RUN apt-get update && apt-get install -y \
     libxext6 \
     libxrender-dev \
     libgomp1 \
-    libglib2.0-0 \
     libglib2.0-dev \
     libgtk-3-dev \
     libavcodec-dev \
@@ -26,7 +25,7 @@ RUN apt-get update && apt-get install -y \
     libjpeg-dev \
     libpng-dev \
     libtiff-dev \
-    libatlas-base-dev \
+    libopenblas-dev \
     python3-dev \
     libpq-dev \
     build-essential \

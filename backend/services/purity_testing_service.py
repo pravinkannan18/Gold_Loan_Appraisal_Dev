@@ -121,6 +121,9 @@ class PurityTestingService:
         self.csv1_path = "data/task_sequence.csv"
         self.csv2_path = "data/task_sequence_main.csv"
         
+        # CSV Cache to avoid repeated disk reads
+        self._csv_cache = {}
+        
         # Threading for video processing
         self._stop_event = threading.Event()
         # self._video_threads = {}
@@ -132,22 +135,67 @@ class PurityTestingService:
     
     def _initialize_models(self):
         """Initialize YOLO models"""
+        print("\n🔄 Initializing YOLO models...")
+        model1_loaded = False
+        model2_loaded = False
+        
         try:
+            # Load Model 1 (Rubbing Test)
             if os.path.exists(self.model1_path):
+                print(f"  Loading Model 1: {self.model1_path}")
                 self.model1 = YOLO(self.model1_path)
-                print(f"✓ Model 1 loaded: {self.model1_path}")
+                print(f"  ✓ Model 1 loaded successfully")
+                print(f"    Class Names: {self.model1.model.names if hasattr(self.model1, 'model') else self.model1.names}")
+                model1_loaded = True
             else:
-                print(f"⚠️ Model 1 not found: {self.model1_path}")
-                
-            if os.path.exists(self.model2_path):
-                self.model2 = YOLO(self.model2_path)
-                print(f"✓ Model 2 loaded: {self.model2_path}")
-            else:
-                print(f"⚠️ Model 2 not found: {self.model2_path}")
+                print(f"  ⚠️ Model 1 file not found: {self.model1_path}")
+                print(f"    Current directory: {os.getcwd()}")
                 
         except Exception as e:
-            print(f"Error loading models: {e}")
+            print(f"  ❌ Error loading Model 1: {e}")
+            import traceback
+            traceback.print_exc()
+            self.model1 = None
+        
+        try:
+            # Load Model 2 (Acid Test)
+            if os.path.exists(self.model2_path):
+                print(f"  Loading Model 2: {self.model2_path}")
+                self.model2 = YOLO(self.model2_path)
+                print(f"  ✓ Model 2 loaded successfully")
+                print(f"    Class Names: {self.model2.model.names if hasattr(self.model2, 'model') else self.model2.names}")
+                model2_loaded = True
+            else:
+                print(f"  ⚠️ Model 2 file not found: {self.model2_path}")
+                print(f"    Current directory: {os.getcwd()}")
+                
+        except Exception as e:
+            print(f"  ❌ Error loading Model 2: {e}")
+            import traceback
+            traceback.print_exc()
+            self.model2 = None
+        
+        # Service is available if at least one model loaded
+        if model1_loaded or model2_loaded:
+            print(f"\n✓ Purity Testing Service Ready (Model1: {model1_loaded}, Model2: {model2_loaded})")
+            self.available = True
+        else:
+            print(f"\n⚠️ No models loaded - service will show live feed only")
             self.available = False
+    
+    def reload_models(self):
+        """Force reload of YOLO models"""
+        print("\n🔄 Force reloading YOLO models...")
+        self.model1 = None
+        self.model2 = None
+        self._csv_cache.clear()
+        self._initialize_models()
+        return {
+            "success": True,
+            "model1_loaded": self.model1 is not None,
+            "model2_loaded": self.model2 is not None,
+            "available": self.is_available()
+        }
     
     def is_available(self) -> bool:
         """Check if purity testing service is available"""
@@ -180,13 +228,28 @@ class PurityTestingService:
             return frame
         
         try:
-            tasks = pd.read_csv(csv_path)
-            results = model.predict(frame, imgsz=320, conf=0.3, verbose=False)
+            if csv_path in self._csv_cache:
+                tasks = self._csv_cache[csv_path]
+            else:
+                tasks = pd.read_csv(csv_path)
+                self._csv_cache[csv_path] = tasks
+
+            results = model.predict(frame, imgsz=320, conf=0.25, verbose=False, half=False, device='cpu')
             detections = results[0]
             boxes = detections.boxes.xyxy.cpu().numpy()
             class_ids = detections.boxes.cls.cpu().numpy().astype(int)
+            confidences = detections.boxes.conf.cpu().numpy()
             class_names = model.model.names
             class_labels = [class_names[i] for i in class_ids]
+            
+            # Debug: Show detection count
+            if len(boxes) > 0:
+                cv2.putText(frame, f"Detections: {len(boxes)}", (10, frame.shape[0] - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+            
+            # Track which boxes are part of a pair
+            pair_indices = set()
+            active_labels = []
             
             for idx, row in tasks.iterrows():
                 t1, t2 = str(row['target1']), str(row['target2'])
@@ -194,6 +257,12 @@ class PurityTestingService:
                 hold_seconds = float(row.get('hold_seconds', 5))
                 min_fluctuations = int(row.get('min_fluctuations', 3))
                 pairs = self.detect_pairs(boxes, class_labels, t1, t2, iou_threshold=0.05)
+                
+                if pairs:
+                    active_labels.append(label)
+                    for i, j in pairs:
+                        pair_indices.add(i)
+                        pair_indices.add(j)
                 
                 key = (csv_path, label)
                 state = detection_states.setdefault(key, {
@@ -233,18 +302,41 @@ class PurityTestingService:
                             state["detected_time"] = None
                             state["fluctuation_count"] = 0
                             state["last_detected"] = False
+            
+            # Final Box Drawing (Move OUTSIDE task loop to avoid overdrawing)
+            h, w = frame.shape[:2]
+            for idx_box, box in enumerate(boxes):
+                # Ensure coordinates are within image boundaries
+                x1, y1, x2, y2 = map(int, box)
+                x1 = max(0, min(x1, w-1))
+                y1 = max(0, min(y1, h-1))
+                x2 = max(0, min(x2, w-1))
+                y2 = max(0, min(y2, h-1))
                 
-                # Draw Boxes
-                for idx_box, box in enumerate(boxes):
-                    x1, y1, x2, y2 = map(int, box)
-                    color = (0, 255, 0)
-                    if any(idx_box in pair for pair in pairs):
-                        color = (0, 0, 255)
-                        cv2.putText(frame, f"{label}", (x1, y1 - 10),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                    cv2.putText(frame, class_labels[idx_box],
-                                (x1, y2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                # Check if this detection belongs to NO relevant class? 
+                # (Optional: Filter boxes not mentioned in CSV if needed)
+                
+                is_pair = idx_box in pair_indices
+                color = (0, 0, 255) if is_pair else (0, 255, 0) # Red if pair, Green if single
+                
+                # Draw the rectangle with thicker line
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
+                
+                # Draw class label with confidence
+                class_label = class_labels[idx_box]
+                conf_score = confidences[idx_box] if idx_box < len(confidences) else 0.0
+                label_text = f"{class_label} {conf_score:.2f}"
+                
+                # Draw background for text
+                (text_w, text_h), _ = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+                cv2.rectangle(frame, (x1, y1 - text_h - 10), (x1 + text_w, y1), color, -1)
+                cv2.putText(frame, label_text, (x1, y1 - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                
+                # If it's part of a pair, also show the task label (e.g. "Rubbing")
+                if is_pair and active_labels:
+                    cv2.putText(frame, " | ".join(active_labels), (x1, y2 + 20),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
             
         except Exception as e:
             print(f"Error in YOLO processing: {e}")
@@ -266,14 +358,19 @@ class PurityTestingService:
             return frame
 
         try:
+            if csv_path in self._csv_cache:
+                tasks = self._csv_cache[csv_path]
+            else:
+                tasks = pd.read_csv(csv_path)
+                self._csv_cache[csv_path] = tasks
+
             results = model.predict(frame, imgsz=320, conf=0.3, verbose=False)
             detections = results[0]
             boxes = detections.boxes.xyxy.cpu().numpy()
             class_ids = detections.boxes.cls.cpu().numpy().astype(int)
             class_names = model.model.names
             class_labels = [class_names[i] for i in class_ids]
-
-            tasks = pd.read_csv(csv_path)
+            
             for idx, row in tasks.iterrows():
                 t1, t2 = str(row['target1']), str(row['target2'])
                 label = row['label']
@@ -326,7 +423,9 @@ class PurityTestingService:
         results = {
             "annotated_frame1": None,
             "annotated_frame2": None,
-            "detection_status": self.get_detection_status()
+            "detection_status": self.get_detection_status(),
+            "model1_status": "ready" if self.model1 else "not_loaded",
+            "model2_status": "ready" if self.model2 else "not_loaded"
         }
 
         try:
@@ -336,10 +435,25 @@ class PurityTestingService:
                 nparr1 = np.frombuffer(img1_bytes, np.uint8)
                 frame1 = cv2.imdecode(nparr1, cv2.IMREAD_COLOR)
                 
-                if frame1 is not None and self.model1:
-                    annotated1 = self.run_yolo_with_csv(frame1, self.model1, self.csv1_path, self.detection_states)
+                if frame1 is not None:
+                    # print(f"[Frame1] Received frame size: {frame1.shape}")  # Comment out for performance
+                    if self.model1:
+                        # Run YOLO analysis
+                        # print(f"[Frame1] Running YOLO analysis with Model 1...")
+                        annotated1 = self.run_yolo_with_csv(frame1, self.model1, self.csv1_path, self.detection_states)
+                        # print(f"[Frame1] Analysis complete")
+                    else:
+                        # Model not loaded - show live feed with status message
+                        annotated1 = frame1.copy()
+                        cv2.putText(annotated1, "Model 1 Loading...", (10, 30), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
+                        cv2.putText(annotated1, "LIVE MONITOR", (10, 70), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                    
+                    # Always encode and return the frame
                     _, buf1 = cv2.imencode('.jpg', annotated1, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
                     results["annotated_frame1"] = f"data:image/jpeg;base64,{base64.b64encode(buf1).decode()}"
+                    # print(f"[Frame1] Annotated frame encoded and ready")
 
             # Process Frame 2 (Side View / Acid)
             if frame2_b64:
@@ -347,10 +461,25 @@ class PurityTestingService:
                 nparr2 = np.frombuffer(img2_bytes, np.uint8)
                 frame2 = cv2.imdecode(nparr2, cv2.IMREAD_COLOR)
                 
-                if frame2 is not None and self.model2:
-                    annotated2 = self.run_yolo_with_csv(frame2, self.model2, self.csv2_path, self.detection_states)
+                if frame2 is not None:
+                    # print(f"[Frame2] Received frame size: {frame2.shape}")
+                    if self.model2:
+                        # Run YOLO analysis
+                        # print(f"[Frame2] Running YOLO analysis with Model 2...")
+                        annotated2 = self.run_yolo_with_csv(frame2, self.model2, self.csv2_path, self.detection_states)
+                        # print(f"[Frame2] Analysis complete")
+                    else:
+                        # Model not loaded - show live feed with status message
+                        annotated2 = frame2.copy()
+                        cv2.putText(annotated2, "Model 2 Loading...", (10, 30), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
+                        cv2.putText(annotated2, "SIDE MONITOR", (10, 70), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                    
+                    # Always encode and return the frame
                     _, buf2 = cv2.imencode('.jpg', annotated2, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
                     results["annotated_frame2"] = f"data:image/jpeg;base64,{base64.b64encode(buf2).decode()}"
+                    # print(f"[Frame2] Annotated frame encoded and ready")
 
             # Update detection status in results
             results["detection_status"] = self.get_detection_status()
@@ -362,6 +491,8 @@ class PurityTestingService:
 
         except Exception as e:
             print(f"Error in analyze_frames: {e}")
+            import traceback
+            traceback.print_exc()
             results["error"] = str(e)
 
         return results
@@ -498,12 +629,19 @@ class PurityTestingService:
     
     def get_detection_status(self) -> Dict[str, Any]:
         """Get current detection status"""
-        return self.detection_status.copy()
+        status = self.detection_status.copy()
+        status["models_loaded"] = {
+            "model1": self.model1 is not None,
+            "model2": self.model2 is not None
+        }
+        return status
     
     def reset_detection_status(self):
         """Reset detection status"""
+        print("🔄 Resetting detection status...")
         self.detection_status = {"message": "No detection yet", "timestamp": None}
         self.detection_states.clear()
+        print("✓ Detection status reset complete")
     
     def get_available_cameras(self) -> List[int]:
         """Get list of available cameras (returns indices only)"""
@@ -801,21 +939,13 @@ See CAMERA_TROUBLESHOOTING.md for more help.
                         time.sleep(0.01)
                         continue
                     
-                    # Apply YOLO analysis if model is available
-                    if self.model1:
-                        try:
-                            frame = self.run_yolo_analysis_on_frame(frame)
-                        except Exception as e:
-                            cv2.putText(frame, f"Analysis Error: {str(e)[:30]}", 
-                                      (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-                    
                     # Encode frame as JPEG
                     ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
                     if ret:
                         yield (b'--frame\r\n'
                                b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
                     
-                    time.sleep(0.033)  # ~30 FPS
+                    time.sleep(0.066)  # ~15 FPS for stability
                     
                 except Exception as e:
                     print(f"Error in video feed 1: {e}")
@@ -835,24 +965,13 @@ See CAMERA_TROUBLESHOOTING.md for more help.
                         time.sleep(0.01)
                         continue
                     
-                    # Apply YOLO analysis if model is available
-                    if self.model2:
-                        try:
-                            # Use model2 and csv2 for second camera
-                            tasks = pd.read_csv(self.csv2_path) if os.path.exists(self.csv2_path) else None
-                            if tasks is not None:
-                                frame = self.run_yolo_with_csv(frame, self.model2, self.csv2_path, self.detection_states)
-                        except Exception as e:
-                            cv2.putText(frame, f"Analysis Error: {str(e)[:30]}", 
-                                      (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-                    
                     # Encode frame as JPEG
                     ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
                     if ret:
                         yield (b'--frame\r\n'
                                b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
                     
-                    time.sleep(0.033)  # ~30 FPS
+                    time.sleep(0.066)  # ~15 FPS for stability
                     
                 except Exception as e:
                     print(f"Error in video feed 2: {e}")

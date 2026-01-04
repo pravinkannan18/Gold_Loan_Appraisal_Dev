@@ -76,6 +76,8 @@ export function PurityTesting() {
   // New: State for annotated frames from backend
   const [annotatedFrame1, setAnnotatedFrame1] = useState<string | null>(null);
   const [annotatedFrame2, setAnnotatedFrame2] = useState<string | null>(null);
+  const lastFrame1UpdateRef = useRef<number>(Date.now());
+  const lastFrame2UpdateRef = useRef<number>(Date.now());
 
   // New: Streams state
   const stream1Ref = useRef<MediaStream | null>(null);
@@ -83,6 +85,7 @@ export function PurityTesting() {
   const previewStream1Ref = useRef<MediaStream | null>(null);
   const previewStream2Ref = useRef<MediaStream | null>(null);
   const analysisIntervalRef = useRef<number | null>(null);
+  const isRecordingRef = useRef<boolean>(false); // Track recording state for analysis loop
 
   // Use the camera detection hook for smart auto-detection
   const {
@@ -210,6 +213,7 @@ export function PurityTesting() {
       }
 
       setIsRecording(true);
+      isRecordingRef.current = true; // Set ref immediately for analysis loop
       setCurrentRecordingItem(itemNumber);
       setDetectedActivities([]);
       setRubbingCompleted(false);
@@ -220,8 +224,12 @@ export function PurityTesting() {
       // Reset backend detection status
       await fetch(`${BASE_URL}/api/purity/reset_status`, { method: 'POST' });
 
-      // Start analysis loop
-      startAnalysisLoop();
+      console.log('✅ Recording state set to true, starting analysis loop...');
+      
+      // Start analysis loop with a small delay to ensure state is updated
+      setTimeout(() => {
+        startAnalysisLoop();
+      }, 100);
 
       showToast(`Local analysis started using ${selectedFaceCam.label} and ${selectedScanCam.label}`, 'success');
     } catch (error) {
@@ -291,57 +299,118 @@ export function PurityTesting() {
   }, [selectedScanCam, isRecording, selectedFaceCam]);
 
   const startAnalysisLoop = () => {
-    if (analysisIntervalRef.current) clearInterval(analysisIntervalRef.current);
+    if (analysisIntervalRef.current) clearTimeout(analysisIntervalRef.current);
 
-    analysisIntervalRef.current = window.setInterval(async () => {
-      if (!isRecording && !stream1Ref.current) return;
+    const runAnalysis = async () => {
+      if (!isRecordingRef.current || !stream1Ref.current) {
+        console.log('⚠️ Analysis loop check:', { isRecording: isRecordingRef.current, hasStream: !!stream1Ref.current });
+        return;
+      }
 
       try {
         const frame1 = captureFrameToB64(video1Ref.current, canvas1Ref.current);
         const frame2 = captureFrameToB64(video2Ref.current, canvas2Ref.current);
 
-        if (!frame1 && !frame2) return;
-
-        const response = await fetch(`${BASE_URL}/api/purity/analyze`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ frame1, frame2 })
+        console.log('📸 Frame capture result:', { 
+          hasFrame1: !!frame1, 
+          hasFrame2: !!frame2,
+          frame1Len: frame1?.length || 0,
+          frame2Len: frame2?.length || 0
         });
 
-        if (response.ok) {
-          const data = await response.json();
-          // Update annotated frames only if data is present, otherwise reset to null to show local video
-          setAnnotatedFrame1(data.annotated_frame1 || null);
-          setAnnotatedFrame2(data.annotated_frame2 || null);
+        if (frame1 || frame2) {
+          console.log('🔄 POST /api/purity/analyze');
+          const response = await fetch(`${BASE_URL}/api/purity/analyze`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ frame1, frame2 })
+          });
 
-          // Update flags
-          if (data.rubbing_detected && !rubbingCompleted) {
-            setRubbingCompleted(true);
-            showToast('✅ Rubbing Test Detected!', 'success');
-            setDetectedActivities(prev => [...prev, { activity: 'rubbing', confidence: 0.95, timestamp: Date.now() }]);
-          }
-          if (data.acid_detected && !acidCompleted) {
-            setAcidCompleted(true);
-            showToast('✅ Acid Test Detected!', 'success');
-            setDetectedActivities(prev => [...prev, { activity: 'acid_testing', confidence: 0.95, timestamp: Date.now() }]);
+          console.log('📡 Backend response:', response.status);
+
+          if (response.ok) {
+            const data = await response.json();
+            
+            console.log('📊 Analysis response:', {
+              hasFrame1: !!data.annotated_frame1,
+              hasFrame2: !!data.annotated_frame2,
+              model1Status: data.model1_status,
+              model2Status: data.model2_status,
+              frame1Length: data.annotated_frame1?.length || 0,
+              frame2Length: data.annotated_frame2?.length || 0
+            });
+            
+            // Always display frames, even if models are loading
+            if (data.annotated_frame1) {
+              setAnnotatedFrame1(data.annotated_frame1);
+              lastFrame1UpdateRef.current = Date.now();
+              console.log('✅ Frame 1 updated with annotated image');
+            }
+            if (data.annotated_frame2) {
+              setAnnotatedFrame2(data.annotated_frame2);
+              lastFrame2UpdateRef.current = Date.now();
+              console.log('✅ Frame 2 updated with annotated image');
+            }
+            
+            // Show model status if not ready
+            if (data.model1_status === 'not_loaded' || data.model2_status === 'not_loaded') {
+              console.log('Model status:', {
+                model1: data.model1_status,
+                model2: data.model2_status
+              });
+            }
+
+            if (data.rubbing_detected && !rubbingCompleted) {
+              setRubbingCompleted(true);
+              showToast('✅ Rubbing Test Detected!', 'success');
+              setDetectedActivities(prev => [...prev, { activity: 'rubbing', confidence: 0.95, timestamp: Date.now() }]);
+            }
+            if (data.acid_detected && !acidCompleted) {
+              setAcidCompleted(true);
+              showToast('✅ Acid Test Detected!', 'success');
+              setDetectedActivities(prev => [...prev, { activity: 'acid_testing', confidence: 0.95, timestamp: Date.now() }]);
+            }
+          } else {
+            console.error('Analysis failed:', response.status, response.statusText);
           }
         }
       } catch (err) {
         console.error('Analysis loop error:', err);
+        // Continue the loop even on error - don't let one failed frame stop everything
       }
-    }, 200); // 5 FPS for analysis to balance load
+
+      // Schedule next execution AFTER previous one completes
+      if (isRecordingRef.current) {
+        analysisIntervalRef.current = window.setTimeout(runAnalysis, 500); // ~2 FPS for better stability
+      }
+      
+      // Clear stale annotated frames (older than 2 seconds)
+      const now = Date.now();
+      if (annotatedFrame1 && (now - lastFrame1UpdateRef.current) > 2000) {
+        console.log('⚠️ Frame 1 stale, clearing...');
+        setAnnotatedFrame1(null);
+      }
+      if (annotatedFrame2 && (now - lastFrame2UpdateRef.current) > 2000) {
+        console.log('⚠️ Frame 2 stale, clearing...');
+        setAnnotatedFrame2(null);
+      }
+    };
+
+    runAnalysis();
   };
 
   const captureFrameToB64 = (video: HTMLVideoElement | null, canvas: HTMLCanvasElement | null): string | null => {
     if (!video || !canvas || video.readyState < 2) return null;
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    // Reduced resolution for faster processing
+    canvas.width = 480;
+    canvas.height = 360;
+
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
 
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL('image/jpeg', 0.6); // Lower quality for faster transport
+    return canvas.toDataURL('image/jpeg', 0.6); // Slightly better quality
   };
 
   // Stop local streaming and analysis
@@ -362,6 +431,7 @@ export function PurityTesting() {
       }
 
       setIsRecording(false);
+      isRecordingRef.current = false; // Update ref as well
       setCurrentRecordingItem(null);
 
       if (showNotification) showToast('Streaming and analysis stopped', 'info');
@@ -858,12 +928,12 @@ export function PurityTesting() {
                       autoPlay
                       playsInline
                       muted
-                      className={`w-full h-64 object-cover ${annotatedFrame1 ? 'hidden' : 'block'}`}
+                      className={`w-full h-64 object-cover ${annotatedFrame1 && isRecording ? 'hidden' : 'block'}`}
                     />
                     <canvas ref={canvas1Ref} className="hidden" />
 
                     {/* Display annotated frame */}
-                    {annotatedFrame1 && (
+                    {annotatedFrame1 && isRecording && (
                       <img
                         src={annotatedFrame1}
                         alt="Top View Annotated"
@@ -900,12 +970,12 @@ export function PurityTesting() {
                       autoPlay
                       playsInline
                       muted
-                      className={`w-full h-64 object-cover ${annotatedFrame2 ? 'hidden' : 'block'}`}
+                      className={`w-full h-64 object-cover ${annotatedFrame2 && isRecording ? 'hidden' : 'block'}`}
                     />
                     <canvas ref={canvas2Ref} className="hidden" />
 
                     {/* Display annotated frame */}
-                    {annotatedFrame2 && (
+                    {annotatedFrame2 && isRecording && (
                       <img
                         src={annotatedFrame2}
                         alt="Side View Annotated"

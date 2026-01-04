@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Camera, ImageIcon, ArrowLeft, ArrowRight } from 'lucide-react';
 import { StepIndicator } from '../components/journey/StepIndicator';
 import { LiveCamera, LiveCameraHandle } from '../components/journey/LiveCamera';
+import { CameraSelector } from '../components/CameraSelector';
 import { apiService } from '../services/api';
 import { generateAppraiserId, showToast } from '../lib/utils';
 
@@ -15,6 +16,7 @@ export function AppraiserDetails() {
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [isCameraReady, setIsCameraReady] = useState(false);
   const [cameraError, setCameraError] = useState('');
+  const [selectedCameraId, setSelectedCameraId] = useState<string>('');
 
   // Check for captured photo from facial recognition
   useEffect(() => {
@@ -277,9 +279,21 @@ export function AppraiserDetails() {
                     </span>
                   </div>
 
+                  {/* Camera Selection */}
+                  {!isCameraOpen && (
+                    <div className="mt-6">
+                      <CameraSelector
+                        onCameraSelect={setSelectedCameraId}
+                        selectedDeviceId={selectedCameraId}
+                        autoDetect={true}
+                      />
+                    </div>
+                  )}
+
                   <LiveCamera
                     ref={cameraRef}
                     currentStepKey={1}
+                    selectedDeviceId={selectedCameraId}
                     displayMode="inline"
                     className="mt-6"
                     onOpen={() => setIsCameraOpen(true)}

@@ -3,6 +3,7 @@ import { useLocation,useNavigate } from 'react-router-dom';
 import { Camera, ArrowLeft, ArrowRight, Shield, CheckCircle, Sparkles, FileImage, Settings, Zap,MapPin, Globe, AlertCircle, Loader2 } from 'lucide-react';
 import { StepIndicator } from '../components/journey/StepIndicator';
 import { LiveCamera, LiveCameraHandle } from '../components/journey/LiveCamera';
+import { CameraSelector } from '../components/CameraSelector';
 import { showToast } from '../lib/utils';
 
 interface JewelleryItemCapture {
@@ -35,6 +36,7 @@ export function RBICompliance() {
   const [currentCapturingItem, setCurrentCapturingItem] = useState<number | null>(null);
   const [captureMode, setCaptureMode] = useState<'overall' | 'individual' | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [selectedCameraId, setSelectedCameraId] = useState<string>('');
   const stage = useMemo(() => new URLSearchParams(location.search).get("stage") || "customer", [location.search]);
   const currentStepKey = stageToStepKey[stage] || 1;
 
@@ -845,7 +847,22 @@ export function RBICompliance() {
         </div>
       </div>
 
-      <LiveCamera ref={cameraRef}  currentStepKey={3}/>
+      {/* Camera Selection - shown only when camera is not open */}
+      {!captureMode && (
+        <div className="fixed bottom-8 right-8 z-40 max-w-md">
+          <CameraSelector
+            onCameraSelect={setSelectedCameraId}
+            selectedDeviceId={selectedCameraId}
+            autoDetect={true}
+          />
+        </div>
+      )}
+
+      <LiveCamera 
+        ref={cameraRef} 
+        currentStepKey={3}
+        selectedDeviceId={selectedCameraId}
+      />
 
       {cameraRef.current && captureMode && (
         <div className="fixed bottom-8 left-1/2 transform -translate-x-1/2 z-50">

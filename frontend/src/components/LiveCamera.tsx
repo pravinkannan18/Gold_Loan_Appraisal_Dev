@@ -7,6 +7,7 @@ interface LiveCameraProps {
   onCapture: (imageDataUrl: string) => void;
   onClose?: () => void;
   currentStepKey: number;   // New: current step key from StepIndicator
+  selectedDeviceId?: string; // Manual camera selection
 }
 
 export interface LiveCameraRef {
@@ -15,7 +16,7 @@ export interface LiveCameraRef {
 }
 
 const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>((props, ref) => {
-  const { onCapture, onClose, currentStepKey } = props;  // Receive step key
+  const { onCapture, onClose, currentStepKey, selectedDeviceId } = props;  // Receive step key and device ID
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -58,13 +59,19 @@ const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>((props, ref) => {
           let targetDeviceId: string | undefined = undefined;
           let targetIndex: number = -1;
 
-          // Set your known device IDs for each step key
-          if (currentStepKey === 2) {
-            targetDeviceId = 'd71d64e11e05c2988940b827afec7d177181ba8a5ba2791cc34ebb438fa43d8f';
-          } else if (currentStepKey === 3) {
-            targetDeviceId = '686ba1f1435a79b8ddd2cabaa0223d9afd85cf1aa82bb9ec3f069e3ac41df0e8';
-          } else if (currentStepKey === 4) {
-            targetDeviceId = '686ba1f1435a79b8ddd2cabaa0223d9afd85cf1aa82bb9ec3f069e3ac41df0e8';
+          // Priority: 1. selectedDeviceId prop, 2. step-based mapping, 3. fallback
+          if (selectedDeviceId) {
+            targetDeviceId = selectedDeviceId;
+            console.log(`Using manually selected camera: ${targetDeviceId}`);
+          } else {
+            // Set your known device IDs for each step key
+            if (currentStepKey === 2) {
+              targetDeviceId = 'd71d64e11e05c2988940b827afec7d177181ba8a5ba2791cc34ebb438fa43d8f';
+            } else if (currentStepKey === 3) {
+              targetDeviceId = '686ba1f1435a79b8ddd2cabaa0223d9afd85cf1aa82bb9ec3f069e3ac41df0e8';
+            } else if (currentStepKey === 4) {
+              targetDeviceId = '686ba1f1435a79b8ddd2cabaa0223d9afd85cf1aa82bb9ec3f069e3ac41df0e8';
+            }
           }
 
           if (targetDeviceId) {
@@ -96,7 +103,7 @@ const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>((props, ref) => {
     getCamerasAndSelect();
 
     return () => stopCamera();
-  }, [currentStepKey]);  // Re-run if step changes
+  }, [currentStepKey, selectedDeviceId]);  // Re-run if step or device changes
 
   const startCamera = async (deviceId?: string) => {
     try {

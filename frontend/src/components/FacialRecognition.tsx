@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Camera, User, CheckCircle, X, UserPlus, Loader2 } from "lucide-react";
 import LiveCamera, { LiveCameraRef } from "@/components/LiveCamera";
+import { CameraSelector } from "@/components/CameraSelector";
 import { toast } from "@/hooks/use-toast";
 import { AppraiserProfile, AppraiserIdentificationData } from "@/types/facial-recognition";
 import { useLocation } from "react-router-dom";
@@ -30,6 +31,7 @@ const FacialRecognition = ({ onAppraiserIdentified, onNewAppraiserRequired, onCa
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [analysisMessage, setAnalysisMessage] = useState('');
+  const [selectedCameraId, setSelectedCameraId] = useState<string>('');
   const cameraRef = useRef<LiveCameraRef>(null);
   const location = useLocation();
   const stage = useMemo(() => new URLSearchParams(location.search).get("stage") || "customer", [location.search]);
@@ -386,10 +388,20 @@ const FacialRecognition = ({ onAppraiserIdentified, onNewAppraiserRequired, onCa
         </p>
       </div>
 
+      {/* Camera Selection */}
+      <div className="mb-4">
+        <CameraSelector
+          onCameraSelect={setSelectedCameraId}
+          selectedDeviceId={selectedCameraId}
+          autoDetect={true}
+        />
+      </div>
+
       <div className="border-2 border-dashed border-gray-300 rounded-lg p-4">
         <LiveCamera
           ref={cameraRef}
           currentStepKey={currentStepKey}
+          selectedDeviceId={selectedCameraId}
           onCapture={handleCameraCapture}
           onClose={onCancel}
         />

@@ -18,10 +18,21 @@ interface LiveCameraProps {
   onReadyChange?: (ready: boolean) => void;
   onError?: (message: string) => void;
   currentStepKey?: number;
+  selectedDeviceId?: string; // New prop for manual camera selection
 }
 
 export const LiveCamera = forwardRef<LiveCameraHandle, LiveCameraProps>(
-  ({ onCapture, className = '', displayMode = 'modal', onOpen, onClose, onReadyChange, onError,currentStepKey }, ref) => {
+  ({ 
+    onCapture, 
+    className = '', 
+    displayMode = 'modal', 
+    onOpen, 
+    onClose, 
+    onReadyChange, 
+    onError,
+    currentStepKey,
+    selectedDeviceId // Accept the new prop
+  }, ref) => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const streamRef = useRef<MediaStream | null>(null);
     const [isOpen, setIsOpen] = useState(false);
@@ -60,8 +71,14 @@ export const LiveCamera = forwardRef<LiveCameraHandle, LiveCameraProps>(
     };
 
     let deviceIdToUse: string | undefined;
-    if (currentStepKey) {
+    
+    // Priority: 1. selectedDeviceId prop, 2. step-based mapping, 3. default
+    if (selectedDeviceId) {
+      deviceIdToUse = selectedDeviceId;
+      console.log(`Using manually selected camera: ${deviceIdToUse}`);
+    } else if (currentStepKey) {
       deviceIdToUse = stepKeyToDeviceId[currentStepKey];
+      console.log(`Using step-based camera for step ${currentStepKey}: ${deviceIdToUse}`);
     }
 
     setIsLoading(true);

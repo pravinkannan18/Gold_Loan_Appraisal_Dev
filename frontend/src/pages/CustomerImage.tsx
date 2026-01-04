@@ -3,6 +3,7 @@ import { useLocation,useNavigate } from 'react-router-dom';
 import { Camera, ArrowLeft, ArrowRight, UserCircle, Shield, Sparkles, Eye } from 'lucide-react';
 import { StepIndicator } from '../components/journey/StepIndicator';
 import { LiveCamera, LiveCameraHandle } from '../components/journey/LiveCamera';
+import { CameraSelector } from '../components/CameraSelector';
 import { showToast } from '../lib/utils';
 
 const stageToStepKey: Record<string, number> = {
@@ -20,6 +21,7 @@ export function CustomerImage() {
   const [frontImage, setFrontImage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [selectedCameraId, setSelectedCameraId] = useState<string>('');
   const stage = useMemo(() => new URLSearchParams(location.search).get("stage") || "customer", [location.search]);
   const currentStepKey = stageToStepKey[stage] || 1;
 
@@ -324,9 +326,21 @@ export function CustomerImage() {
                     </p>
                   </div>
 
+                  {/* Camera Selection */}
+                  {!isCameraOpen && (
+                    <div className="mb-6">
+                      <CameraSelector
+                        onCameraSelect={setSelectedCameraId}
+                        selectedDeviceId={selectedCameraId}
+                        autoDetect={true}
+                      />
+                    </div>
+                  )}
+
                   <LiveCamera
                     ref={cameraRef}
                     currentStepKey={currentStepKey}
+                    selectedDeviceId={selectedCameraId}
                     displayMode="inline"
                     className="rounded-3xl border-4 border-blue-200/50 shadow-2xl"
                     onOpen={() => setIsCameraOpen(true)}

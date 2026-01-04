@@ -23,6 +23,58 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 # Try to import YOLO - make it optional for development
 try:
     from ultralytics import YOLO
+    import torch
+    
+    # Fix for newer PyTorch versions that default to weights_only=True
+    # This is required for loading YOLO models which use custom classes
+    try:
+        if hasattr(torch.serialization, 'add_safe_globals'):
+            import ultralytics.nn.tasks
+            import ultralytics.nn.modules.conv
+            import ultralytics.nn.modules.block
+            import ultralytics.nn.modules.head
+            import torch.nn.modules.container
+            import torch.nn.modules.conv
+            import torch.nn.modules.batchnorm
+            import torch.nn.modules.activation
+            import torch.nn.modules.pooling
+            import torch.nn.modules.upsampling
+            import torch.nn.modules.linear
+            import collections
+            
+            # Common classes found in YOLOv8 models
+            safe_classes = [
+                ultralytics.nn.tasks.DetectionModel,
+                ultralytics.nn.modules.conv.Conv,
+                ultralytics.nn.modules.conv.Concat,
+                ultralytics.nn.modules.block.C2f,
+                ultralytics.nn.modules.block.Bottleneck,
+                ultralytics.nn.modules.block.DFL,
+                ultralytics.nn.modules.block.SPPF,
+                ultralytics.nn.modules.head.Detect,
+                torch.nn.modules.container.Sequential,
+                torch.nn.modules.container.ModuleList,
+                torch.nn.modules.conv.Conv2d,
+                torch.nn.modules.batchnorm.BatchNorm2d,
+                torch.nn.modules.activation.SiLU,
+                torch.nn.modules.pooling.MaxPool2d,
+                torch.nn.modules.upsampling.Upsample,
+                torch.nn.modules.linear.Identity,
+                torch.Size,
+                torch.device,
+                collections.OrderedDict,
+            ]
+            
+            # Add storage types if available
+            for storage in ['FloatStorage', 'LongStorage', 'IntStorage', 'DoubleStorage', 'HalfStorage', 'ByteStorage', 'CharStorage', 'ShortStorage', 'BoolStorage', 'UntypedStorage']:
+                if hasattr(torch, storage):
+                    safe_classes.append(getattr(torch, storage))
+            
+            torch.serialization.add_safe_globals(safe_classes)
+            print("✓ Added comprehensive YOLO/Torch classes to safe globals")
+    except Exception as e:
+        print(f"⚠️ Failed to add safe globals: {e}")
+
     YOLO_AVAILABLE = True
     print("YOLO libraries loaded successfully")
 except ImportError as e:

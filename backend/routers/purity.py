@@ -118,7 +118,7 @@ async def purity_create_sample():
     return purity_service.create_sample_csv_files()
 
 @router.post("/analyze_frame")
-async def analyze_frame(payload: dict):
+def analyze_frame(payload: dict):
     """Analyze a single frame with YOLO (for testing)"""
     import base64
     import cv2
@@ -147,7 +147,7 @@ async def analyze_frame(payload: dict):
     }
 
 @router.post("/analyze")
-async def analyze_dual_frames(request: AnalyzeRequest):
+def analyze_dual_frames(request: AnalyzeRequest):
     """Analyze dual frames sent from frontend"""
     try:
         results = purity_service.analyze_frames(

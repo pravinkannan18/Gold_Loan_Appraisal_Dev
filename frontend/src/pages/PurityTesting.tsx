@@ -80,6 +80,8 @@ export function PurityTesting() {
   // New: Streams state
   const stream1Ref = useRef<MediaStream | null>(null);
   const stream2Ref = useRef<MediaStream | null>(null);
+  const previewStream1Ref = useRef<MediaStream | null>(null);
+  const previewStream2Ref = useRef<MediaStream | null>(null);
   const analysisIntervalRef = useRef<number | null>(null);
 
   // Use the camera detection hook for smart auto-detection
@@ -175,8 +177,16 @@ export function PurityTesting() {
 
       setIsLoading(true);
 
-      // Stop any existing streams first
-      stopVideoRecording(false);
+      // CRITICAL: Stop preview streams before starting analysis streams
+      // to avoid 'Camera Busy' or 'NotReadableError'
+      if (previewStream1Ref.current) {
+        previewStream1Ref.current.getTracks().forEach(t => t.stop());
+        previewStream1Ref.current = null;
+      }
+      if (previewStream2Ref.current) {
+        previewStream2Ref.current.getTracks().forEach(t => t.stop());
+        previewStream2Ref.current = null;
+      }
 
       console.log('📹 Opening cameras locally...');
 
@@ -228,11 +238,11 @@ export function PurityTesting() {
     const startPreview1 = async () => {
       if (selectedFaceCam && !isRecording) {
         try {
-          if (stream1Ref.current) stream1Ref.current.getTracks().forEach(t => t.stop());
+          if (previewStream1Ref.current) previewStream1Ref.current.getTracks().forEach(t => t.stop());
           const stream = await navigator.mediaDevices.getUserMedia({
             video: { deviceId: { exact: selectedFaceCam.deviceId }, width: 640, height: 480 }
           });
-          stream1Ref.current = stream;
+          previewStream1Ref.current = stream;
           if (video1Ref.current) video1Ref.current.srcObject = stream;
         } catch (err) {
           console.error("Preview 1 error:", err);
@@ -241,9 +251,9 @@ export function PurityTesting() {
     };
     startPreview1();
     return () => {
-      if (!isRecording && stream1Ref.current) {
-        stream1Ref.current.getTracks().forEach(t => t.stop());
-        stream1Ref.current = null;
+      if (previewStream1Ref.current) {
+        previewStream1Ref.current.getTracks().forEach(t => t.stop());
+        previewStream1Ref.current = null;
       }
     };
   }, [selectedFaceCam, isRecording]);
@@ -252,18 +262,18 @@ export function PurityTesting() {
     const startPreview2 = async () => {
       if (selectedScanCam && !isRecording) {
         try {
-          if (stream2Ref.current && stream2Ref.current !== stream1Ref.current) {
-            stream2Ref.current.getTracks().forEach(t => t.stop());
+          if (previewStream2Ref.current) {
+            previewStream2Ref.current.getTracks().forEach(t => t.stop());
           }
 
           if (selectedFaceCam?.deviceId === selectedScanCam.deviceId) {
-            if (video2Ref.current) video2Ref.current.srcObject = stream1Ref.current;
-            stream2Ref.current = stream1Ref.current;
+            if (video2Ref.current) video2Ref.current.srcObject = previewStream1Ref.current;
+            previewStream2Ref.current = previewStream1Ref.current;
           } else {
             const stream = await navigator.mediaDevices.getUserMedia({
               video: { deviceId: { exact: selectedScanCam.deviceId }, width: 640, height: 480 }
             });
-            stream2Ref.current = stream;
+            previewStream2Ref.current = stream;
             if (video2Ref.current) video2Ref.current.srcObject = stream;
           }
         } catch (err) {
@@ -273,9 +283,9 @@ export function PurityTesting() {
     };
     startPreview2();
     return () => {
-      if (!isRecording && stream2Ref.current && stream2Ref.current !== stream1Ref.current) {
-        stream2Ref.current.getTracks().forEach(t => t.stop());
-        stream2Ref.current = null;
+      if (previewStream2Ref.current && previewStream2Ref.current !== previewStream1Ref.current) {
+        previewStream2Ref.current.getTracks().forEach(t => t.stop());
+        previewStream2Ref.current = null;
       }
     };
   }, [selectedScanCam, isRecording, selectedFaceCam]);
@@ -300,8 +310,9 @@ export function PurityTesting() {
 
         if (response.ok) {
           const data = await response.json();
-          if (data.annotated_frame1) setAnnotatedFrame1(data.annotated_frame1);
-          if (data.annotated_frame2) setAnnotatedFrame2(data.annotated_frame2);
+          // Update annotated frames only if data is present, otherwise reset to null to show local video
+          setAnnotatedFrame1(data.annotated_frame1 || null);
+          setAnnotatedFrame2(data.annotated_frame2 || null);
 
           // Update flags
           if (data.rubbing_detected && !rubbingCompleted) {
@@ -823,7 +834,7 @@ export function PurityTesting() {
                   </Button>
                 ) : (
                   <Button
-                    onClick={stopVideoRecording}
+                    onClick={() => stopVideoRecording()}
                     className="bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-700 hover:to-rose-700 text-white font-semibold px-8 py-4 rounded-xl shadow-lg transition-all duration-300 hover:shadow-xl text-lg"
                   >
                     <Square className="w-6 h-6 mr-3" />

@@ -20,10 +20,11 @@ from services.camera_service import CameraService
 from services.facial_recognition_service import FacialRecognitionService
 from services.purity_testing_service import PurityTestingService
 from services.fast_purity_service import get_fast_purity_service
+from services.aws_purity_service import get_aws_purity_service
 from services.gps_service import GPSService
 
 # Import routers
-from routers import appraiser, appraisal, camera, face, purity, gps, purity_fast
+from routers import appraiser, appraisal, camera, face, purity, gps, purity_fast, purity_aws
 
 # ============================================================================
 # FastAPI App Initialization
@@ -79,6 +80,10 @@ print(f"✓ Purity testing service initialized (Available: {purity_service.is_av
 fast_purity_service = get_fast_purity_service()
 print(f"✓ Fast purity service initialized (Available: {fast_purity_service.is_available()}, Device: {fast_purity_service.device})")
 
+# AWS Purity Testing Service (Cloud-compatible)
+aws_purity_service = get_aws_purity_service()
+print(f"✓ AWS purity service initialized (Available: {aws_purity_service.is_available()}, Device: {aws_purity_service.device})")
+
 # GPS Service
 gps_service = GPSService()
 print(f"✓ GPS service initialized")
@@ -96,6 +101,7 @@ camera.set_service(camera_service)
 face.set_service(facial_service)
 purity.set_service(purity_service)
 purity_fast.set_service(fast_purity_service)
+purity_aws.set_service(aws_purity_service)
 gps.set_service(gps_service)
 
 # ============================================================================
@@ -108,6 +114,7 @@ app.include_router(camera.router)
 app.include_router(face.router)
 app.include_router(purity.router)
 app.include_router(purity_fast.router)
+app.include_router(purity_aws.router)
 app.include_router(gps.router)
 
 # ============================================================================

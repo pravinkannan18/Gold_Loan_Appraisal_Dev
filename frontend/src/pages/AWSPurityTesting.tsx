@@ -1,55 +1,63 @@
 /**
- * Fast Purity Testing Component
- * Real-time YOLO predictions via WebSocket with backend camera
+ * AWS Purity Testing Component
+ * Camera runs on browser, YOLO runs on AWS GPU
+ * Works when backend is hosted on AWS/cloud
  */
 import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import { useFastPurity, getAvailableCameras } from '../hooks/useFastPurity';
+import { useNavigate } from 'react-router-dom';
+import { useAWSPurity, getAvailableCameras, getAWSServiceStatus } from '../hooks/useAWSPurity';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
-import { Play, Square, RefreshCw, Camera, Wifi, WifiOff, Zap, Clock, Cloud } from 'lucide-react';
+import { 
+  Play, Square, RefreshCw, Camera, Wifi, WifiOff, 
+  Zap, Clock, Cloud, ArrowLeft, Monitor 
+} from 'lucide-react';
 import { showToast } from '../lib/utils';
 
-interface CameraInfo {
-  index: number;
-  name: string;
-  resolution: string;
-}
-
-export function FastPurityTesting() {
+export function AWSPurityTesting() {
+  const navigate = useNavigate();
+  
   const {
     connected,
-    running,
-    frame,
+    streaming,
+    sessionId,
+    annotatedFrame,
     status,
     fps,
     processMs,
     error,
-    start,
-    stop,
+    connect,
+    disconnect,
+    startStreaming,
+    stopStreaming,
     reset,
-  } = useFastPurity();
+  } = useAWSPurity();
 
-  const [cameras, setCameras] = useState<CameraInfo[]>([]);
-  const [selectedCamera, setSelectedCamera] = useState<string>('0');
+  const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
+  const [selectedCamera, setSelectedCamera] = useState<string>('');
+  const [serviceStatus, setServiceStatus] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
-  // Load available cameras
+  // Load available cameras and service status
   useEffect(() => {
-    const loadCameras = async () => {
+    const init = async () => {
       try {
-        const data = await getAvailableCameras();
-        setCameras(data.cameras || []);
-        if (data.current !== null) {
-          setSelectedCamera(String(data.current));
+        const [cams, status] = await Promise.all([
+          getAvailableCameras(),
+          getAWSServiceStatus()
+        ]);
+        setCameras(cams);
+        setServiceStatus(status);
+        if (cams.length > 0) {
+          setSelectedCamera(cams[0].deviceId);
         }
       } catch (e) {
-        console.error('Failed to load cameras:', e);
+        console.error('Init error:', e);
       }
     };
-    loadCameras();
+    init();
   }, []);
 
   // Show toast on detection
@@ -62,14 +70,24 @@ export function FastPurityTesting() {
     }
   }, [status?.rubbing_detected, status?.acid_detected, status?.task]);
 
-  const handleStart = () => {
+  const handleConnect = () => {
     setLoading(true);
-    start(parseInt(selectedCamera));
+    connect();
     setTimeout(() => setLoading(false), 500);
   };
 
+  const handleStart = async () => {
+    if (!connected) {
+      showToast('Please connect first', 'error');
+      return;
+    }
+    setLoading(true);
+    await startStreaming(selectedCamera);
+    setLoading(false);
+  };
+
   const handleStop = () => {
-    stop();
+    stopStreaming();
   };
 
   const handleReset = () => {
@@ -82,27 +100,54 @@ export function FastPurityTesting() {
       <div className="space-y-4">
         {/* Header */}
         <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">Fast Purity Testing</h1>
-            <p className="text-muted-foreground">Real-time YOLO detection via WebSocket</p>
+          <div className="flex items-center gap-3">
+            <Button 
+              variant="ghost" 
+              size="icon"
+              onClick={() => navigate('/purity-testing')}
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </Button>
+            <div>
+              <h1 className="text-2xl font-bold flex items-center gap-2">
+                <Cloud className="w-6 h-6 text-orange-500" />
+                AWS Purity Testing
+              </h1>
+              <p className="text-muted-foreground">
+                Browser camera → AWS GPU → Real-time detection
+              </p>
+            </div>
           </div>
           
-          <div className="flex items-center gap-2">
-            {/* AWS Mode Button */}
-            <Link to="/purity-testing-aws">
-              <Button variant="outline" className="gap-2">
-                <Cloud className="w-4 h-4" />
-                AWS Mode
-              </Button>
-            </Link>
-            
-            {/* Connection Status */}
+          {/* Connection Status */}
+          <div className="flex gap-2">
             <Badge variant={connected ? 'default' : 'destructive'} className="gap-1">
               {connected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
               {connected ? 'Connected' : 'Disconnected'}
             </Badge>
+            {serviceStatus && (
+              <Badge variant="outline" className="gap-1">
+                {serviceStatus.device === 'cuda' ? '🚀 GPU' : '💻 CPU'}
+              </Badge>
+            )}
           </div>
         </div>
+
+        {/* Info Banner */}
+        <Card className="bg-gradient-to-r from-orange-50 to-yellow-50 border-orange-200">
+          <CardContent className="p-4">
+            <div className="flex items-start gap-3">
+              <Cloud className="w-8 h-8 text-orange-500 mt-1" />
+              <div>
+                <h3 className="font-semibold text-orange-900">AWS-Compatible Mode</h3>
+                <p className="text-sm text-orange-700">
+                  Your camera runs in the browser. Frames are sent to AWS for YOLO processing.
+                  Works when backend is hosted on cloud (AWS, GCP, Azure, etc.)
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Error Display */}
         {error && (
@@ -114,7 +159,10 @@ export function FastPurityTesting() {
         {/* Controls */}
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-lg">Camera Control</CardTitle>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Monitor className="w-5 h-5" />
+              Camera Control
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="flex items-center gap-4 flex-wrap">
@@ -124,18 +172,18 @@ export function FastPurityTesting() {
                 <Select 
                   value={selectedCamera} 
                   onValueChange={setSelectedCamera}
-                  disabled={running}
+                  disabled={streaming}
                 >
-                  <SelectTrigger className="w-40">
+                  <SelectTrigger className="w-60">
                     <SelectValue placeholder="Select Camera" />
                   </SelectTrigger>
                   <SelectContent>
                     {cameras.length === 0 ? (
-                      <SelectItem value="0">Camera 0</SelectItem>
+                      <SelectItem value="default">Default Camera</SelectItem>
                     ) : (
-                      cameras.map((cam) => (
-                        <SelectItem key={cam.index} value={String(cam.index)}>
-                          {cam.name} ({cam.resolution})
+                      cameras.map((cam, idx) => (
+                        <SelectItem key={cam.deviceId} value={cam.deviceId}>
+                          {cam.label || `Camera ${idx + 1}`}
                         </SelectItem>
                       ))
                     )}
@@ -143,8 +191,30 @@ export function FastPurityTesting() {
                 </Select>
               </div>
 
-              {/* Start/Stop Button */}
-              {!running ? (
+              {/* Connect Button */}
+              {!connected ? (
+                <Button 
+                  onClick={handleConnect}
+                  disabled={loading}
+                  className="gap-2"
+                  variant="outline"
+                >
+                  <Wifi className="w-4 h-4" />
+                  Connect to AWS
+                </Button>
+              ) : (
+                <Button 
+                  onClick={disconnect}
+                  variant="outline"
+                  className="gap-2"
+                >
+                  <WifiOff className="w-4 h-4" />
+                  Disconnect
+                </Button>
+              )}
+
+              {/* Start/Stop Streaming */}
+              {!streaming ? (
                 <Button 
                   onClick={handleStart} 
                   disabled={!connected || loading}
@@ -168,36 +238,44 @@ export function FastPurityTesting() {
               <Button 
                 onClick={handleReset}
                 variant="outline"
-                disabled={!running}
+                disabled={!streaming}
                 className="gap-2"
               >
                 <RefreshCw className="w-4 h-4" />
                 Reset
               </Button>
             </div>
+
+            {/* Session Info */}
+            {sessionId && (
+              <div className="mt-3 text-sm text-muted-foreground">
+                Session: <code className="bg-muted px-2 py-0.5 rounded">{sessionId}</code>
+              </div>
+            )}
           </CardContent>
         </Card>
 
         {/* Video Display */}
         <Card className="overflow-hidden">
           <CardContent className="p-0 relative">
-            {frame ? (
+            {annotatedFrame ? (
               <img 
-                src={frame} 
+                src={annotatedFrame} 
                 alt="YOLO Detection" 
                 className="w-full aspect-video object-contain bg-black"
               />
             ) : (
               <div className="w-full aspect-video bg-muted flex items-center justify-center">
                 <div className="text-center text-muted-foreground">
-                  <Camera className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                  <p>{running ? 'Loading stream...' : 'Camera not started'}</p>
+                  <Cloud className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                  <p>{streaming ? 'Waiting for AWS response...' : 'Camera not started'}</p>
+                  {!connected && <p className="text-sm mt-1">Connect to AWS first</p>}
                 </div>
               </div>
             )}
 
             {/* Performance Overlay */}
-            {running && (
+            {streaming && (
               <div className="absolute top-2 right-2 bg-black/70 text-white px-3 py-1 rounded-lg text-sm flex gap-4">
                 <span className="flex items-center gap-1">
                   <Zap className="w-3 h-3 text-yellow-400" />
@@ -206,6 +284,10 @@ export function FastPurityTesting() {
                 <span className="flex items-center gap-1">
                   <Clock className="w-3 h-3 text-blue-400" />
                   {processMs.toFixed(0)} ms
+                </span>
+                <span className="flex items-center gap-1">
+                  <Cloud className="w-3 h-3 text-orange-400" />
+                  AWS
                 </span>
               </div>
             )}
@@ -257,16 +339,21 @@ export function FastPurityTesting() {
           </CardContent>
         </Card>
 
-        {/* Performance Info */}
-        <div className="text-center text-sm text-muted-foreground">
-          <p>
-            Backend camera with GPU-accelerated YOLO inference.
-            WebSocket streaming for minimal latency.
-          </p>
-        </div>
+        {/* Architecture Info */}
+        <Card className="bg-muted/50">
+          <CardContent className="p-4">
+            <h4 className="font-medium mb-2">How it works:</h4>
+            <div className="text-sm text-muted-foreground space-y-1">
+              <p>1️⃣ <strong>Browser Camera:</strong> Your device captures video frames</p>
+              <p>2️⃣ <strong>WebSocket:</strong> Frames sent to AWS server in real-time</p>
+              <p>3️⃣ <strong>AWS GPU:</strong> YOLO models process frames (~{processMs || '30-50'}ms)</p>
+              <p>4️⃣ <strong>Response:</strong> Annotated frames streamed back to browser</p>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
 }
 
-export default FastPurityTesting;
+export default AWSPurityTesting;

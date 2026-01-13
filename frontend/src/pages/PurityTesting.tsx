@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, Check, Gem, QrCode, Play, Square, AlertCircle, ScanLine, Download, FileDown, RefreshCw } from 'lucide-react';
+import { useNavigate, Link } from 'react-router-dom';
+import { ArrowLeft, ArrowRight, Check, Gem, QrCode, Play, Square, AlertCircle, ScanLine, Download, FileDown, RefreshCw, Zap } from 'lucide-react';
 import { StepIndicator } from '../components/journey/StepIndicator';
 import { showToast } from '../lib/utils';
 import { Button } from '../components/ui/button';
@@ -743,6 +743,12 @@ export function PurityTesting() {
                 <ScanLine className="w-5 h-5 mr-2" />
                 Camera Setup
               </Button>
+              <Link to="/purity-testing-fast">
+                <Button className="bg-yellow-500 hover:bg-yellow-600 text-black border-2 border-yellow-400 font-semibold">
+                  <Zap className="w-5 h-5 mr-2" />
+                  Fast Mode (WebSocket)
+                </Button>
+              </Link>
             </div>
           </div>
 

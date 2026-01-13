@@ -19,10 +19,11 @@ from models.database import Database
 from services.camera_service import CameraService
 from services.facial_recognition_service import FacialRecognitionService
 from services.purity_testing_service import PurityTestingService
+from services.fast_purity_service import get_fast_purity_service
 from services.gps_service import GPSService
 
 # Import routers
-from routers import appraiser, appraisal, camera, face, purity, gps
+from routers import appraiser, appraisal, camera, face, purity, gps, purity_fast
 
 # ============================================================================
 # FastAPI App Initialization
@@ -74,6 +75,10 @@ print(f"✓ Facial recognition service initialized (Available: {facial_service.i
 purity_service = PurityTestingService(database=db)
 print(f"✓ Purity testing service initialized (Available: {purity_service.is_available()})")
 
+# Fast Purity Testing Service (Optimized WebSocket)
+fast_purity_service = get_fast_purity_service()
+print(f"✓ Fast purity service initialized (Available: {fast_purity_service.is_available()}, Device: {fast_purity_service.device})")
+
 # GPS Service
 gps_service = GPSService()
 print(f"✓ GPS service initialized")
@@ -90,6 +95,7 @@ appraisal.set_database(db)
 camera.set_service(camera_service)
 face.set_service(facial_service)
 purity.set_service(purity_service)
+purity_fast.set_service(fast_purity_service)
 gps.set_service(gps_service)
 
 # ============================================================================
@@ -101,6 +107,7 @@ app.include_router(appraisal.router)
 app.include_router(camera.router)
 app.include_router(face.router)
 app.include_router(purity.router)
+app.include_router(purity_fast.router)
 app.include_router(gps.router)
 
 # ============================================================================
@@ -184,6 +191,11 @@ async def shutdown_event():
     if purity_service.is_running:
         purity_service.stop()
         print("✓ Purity testing service stopped")
+    
+    # Stop fast purity testing if running
+    if fast_purity_service.is_running:
+        fast_purity_service.stop()
+        print("✓ Fast purity testing service stopped")
     
     # Close database connections
     db.close()

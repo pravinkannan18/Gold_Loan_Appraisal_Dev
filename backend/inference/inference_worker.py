@@ -31,7 +31,7 @@ class InferenceWorker:
     IMGSZ = 320  # Model inference size
     CONF_THRESH = 0.5
     IOU_THRESH = 0.5
-    THRESHOLD_FLUCTUATION = 5.0  # Minimum distance change for meaningful movement
+    THRESHOLD_FLUCTUATION = 2.5  # Minimum distance change for meaningful movement (reduced for sensitivity)
     MIN_FLUCTUATIONS = 2  # Minimum direction changes for rubbing
     GOLD_MASK_PERSIST_FRAMES = 2  # How long to keep gold mask between detections (reduced for responsiveness)
     GOLD_INFERENCE_INTERVAL = 1  # Run gold inference EVERY frame for real-time tracking
@@ -336,7 +336,7 @@ class InferenceWorker:
         cy = int(M['m01'] / M['m00'])
         
         # Draw centroid
-        cv2.circle(frame, (cx, cy), 7, (0, 0, 255), -1)
+        cv2.circle(frame, (cx, cy), 4, (0, 0, 255), -1)
         
         # Calculate distance from stone center
         sx1, sy1, sx2, sy2 = stone_bbox

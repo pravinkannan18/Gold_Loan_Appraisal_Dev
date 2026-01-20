@@ -26,7 +26,7 @@ from services.facial_recognition_service import FacialRecognitionService
 from services.gps_service import GPSService
 
 # Import routers
-from routers import appraiser, appraisal, camera, face, gps, webrtc
+from routers import appraiser, appraisal, camera, face, gps, webrtc, session
 
 # ============================================================================
 # FastAPI App Initialization
@@ -75,6 +75,7 @@ gps_service = GPSService()
 # Inject dependencies into routers
 appraiser.set_database(db)
 appraisal.set_database(db)
+session.set_database(db)
 camera.set_service(camera_service)
 face.set_service(facial_service)
 gps.set_service(gps_service)
@@ -85,6 +86,7 @@ gps.set_service(gps_service)
 
 app.include_router(appraiser.router)
 app.include_router(appraisal.router)
+app.include_router(session.router)
 app.include_router(camera.router)
 app.include_router(face.router)
 app.include_router(gps.router)
@@ -105,6 +107,7 @@ async def root():
         "endpoints": {
             "appraiser": "/api/appraiser",
             "appraisal": "/api/appraisal",
+            "session": "/api/session",
             "camera": "/api/camera",
             "face": "/api/face",
             "webrtc": "/api/webrtc",

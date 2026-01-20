@@ -161,7 +161,8 @@ class ModelManager:
             return None
         
         try:
-            results = model(frame, conf=conf, iou=iou, verbose=False)
+            # Use fixed image size 320 as requested for performance
+            results = model(frame, conf=conf, iou=iou, imgsz=320, verbose=False)
             return results[0] if results else None
         except Exception as e:
             logger.error(f"❌ Prediction error ({model_name}): {e}")

@@ -76,32 +76,32 @@ export function CustomerImage() {
     setIsLoading(true);
 
     try {
-      const appraiserDataString = localStorage.getItem('currentAppraiser');
-      console.log('Appraiser data from localStorage:', appraiserDataString);
+      // Get session ID from localStorage
+      const sessionId = localStorage.getItem('appraisal_session_id');
+      console.log('Session ID:', sessionId);
 
-      if (!appraiserDataString) {
-        showToast('Please complete previous steps first', 'error');
+      if (!sessionId) {
+        showToast('Session not found. Please start from appraiser details.', 'error');
         navigate('/appraiser-details');
         return;
       }
 
-      const appraiserData = JSON.parse(appraiserDataString);
-      console.log('Parsed appraiser data:', appraiserData);
+      // Save customer images to session in database
+      console.log('=== SAVING CUSTOMER IMAGES TO SESSION ===');
+      const saveResponse = await fetch(`${import.meta.env.VITE_API_URL}/api/session/${sessionId}/customer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          front_image: frontImage,
+          side_image: null
+        })
+      });
 
-      if (!appraiserData.id && !appraiserData.appraiser_id) {
-        showToast('Appraiser data incomplete. Please start from step 1.', 'error');
-        navigate('/appraiser-details');
-        return;
+      if (!saveResponse.ok) {
+        throw new Error('Failed to save customer images to session');
       }
 
-      // Store customer images in localStorage for now
-      // They will be saved to backend when completing the full appraisal
-      localStorage.setItem('customerFrontImage', frontImage);
-      localStorage.removeItem('customerSideImage');
-
-      console.log('Customer images saved to localStorage');
-      console.log('Front image length:', frontImage.length);
-
+      console.log('Customer images saved to session');
       showToast('Customer images saved!', 'success');
       navigate('/rbi-compliance');
     } catch (error) {

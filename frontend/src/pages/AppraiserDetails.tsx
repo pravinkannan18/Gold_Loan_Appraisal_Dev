@@ -104,7 +104,7 @@ export function AppraiserDetails() {
       console.log('Photo length:', photo.length);
       console.log('Timestamp:', timestamp);
 
-      // Call backend API instead of Supabase
+      // Call backend API to save appraiser
       const response = await apiService.saveAppraiser({
         name: name.trim(),
         id: appraiserId,
@@ -137,45 +137,63 @@ export function AppraiserDetails() {
           showToast(`Appraiser saved but facial recognition setup failed: ${faceData.message || 'Unknown error'}`, 'info');
         } else {
           console.log('Face encoding registered successfully:', faceData);
-          showToast('Appraiser details saved with facial recognition!', 'success');
         }
       } catch (faceError) {
         console.warn('Face registration error:', faceError);
         showToast('Appraiser saved but facial recognition setup failed. Manual login will be required.', 'info');
       }
 
-      console.log('=== BACKEND RESPONSE ===');
-      console.log('Response:', response);
-      console.log('Database ID:', response.id);
+      // Create a new session for this appraisal workflow
+      console.log('=== CREATING APPRAISAL SESSION ===');
+      const sessionResponse = await fetch(`${import.meta.env.VITE_API_URL}/api/session/create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
 
-      // Store appraiser data in localStorage for next steps
+      if (!sessionResponse.ok) {
+        throw new Error('Failed to create appraisal session');
+      }
+
+      const sessionData = await sessionResponse.json();
+      const sessionId = sessionData.session_id;
+      console.log('Session created:', sessionId);
+
+      // Save appraiser data to session in database
+      console.log('=== SAVING APPRAISER TO SESSION ===');
       const appraiserData = {
+        name: name.trim(),
+        id: appraiserId,
+        image: photo,
+        timestamp: timestamp,
+        photo: photo,  // Include both for compatibility
+        db_id: response.id
+      };
+
+      const saveResponse = await fetch(`${import.meta.env.VITE_API_URL}/api/session/${sessionId}/appraiser`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(appraiserData)
+      });
+
+      if (!saveResponse.ok) {
+        throw new Error('Failed to save appraiser data to session');
+      }
+
+      console.log('Appraiser data saved to session');
+
+      // Store ONLY the session_id in localStorage (tiny, no quota issues)
+      localStorage.setItem('appraisal_session_id', sessionId);
+
+      // Also store minimal appraiser info for quick access (no images)
+      localStorage.setItem('currentAppraiser', JSON.stringify({
         id: response.id,
         appraiser_id: appraiserId,
         name: name.trim(),
-        photo: photo,
         timestamp: timestamp,
-      };
+        session_id: sessionId
+      }));
 
-      console.log('=== STORING IN LOCALSTORAGE ===');
-      console.log('Data to store:', appraiserData);
-      console.log('Photo exists:', !!photo);
-      console.log('Photo length:', photo?.length);
-      console.log('Photo preview:', photo?.substring(0, 100));
-
-      localStorage.setItem('currentAppraiser', JSON.stringify(appraiserData));
-
-      // Verify it was stored
-      const stored = localStorage.getItem('currentAppraiser');
-      const parsedStored = JSON.parse(stored || '{}');
-      console.log('=== VERIFICATION ===');
-      console.log('Stored data:', stored);
-      console.log('Stored photo exists:', !!parsedStored.photo);
-      console.log('Stored photo length:', parsedStored.photo?.length);
-
-      // Default success message - may be overridden by face registration
-      let successMessage = 'Appraiser details saved!';
-
+      showToast('Appraiser details saved!', 'success');
       console.log('=== NAVIGATING TO CUSTOMER IMAGE ===');
       navigate('/customer-image');
     } catch (error: any) {

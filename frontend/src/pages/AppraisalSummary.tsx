@@ -67,6 +67,8 @@ export function AppraisalSummary() {
   const [rbiData, setRbiData] = useState<RBIData | null>(null);
   const [purityResults, setPurityResults] = useState<PurityResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [pageLoading, setPageLoading] = useState(true); // Track initial page loading
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [gpsData, setGpsData] = useState<{
     latitude: number;
     longitude: number;
@@ -97,94 +99,127 @@ export function AppraisalSummary() {
     }
   }, []);
   useEffect(() => {
-    const loadData = () => {
-      const appraiserStr = localStorage.getItem('currentAppraiser');
-      const frontImage = localStorage.getItem('customerFrontImage');
-      const sideImage = localStorage.getItem('customerSideImage');
-      const itemsStr = localStorage.getItem('jewelleryItems');
-      const rbiStr = localStorage.getItem('rbiCompliance');
-      const purityStr = localStorage.getItem('purityResults'); // Changed from 'purityTest' to 'purityResults'
+    const loadData = async () => {
+      try {
+        // Get session ID from localStorage
+        const sessionId = localStorage.getItem('appraisal_session_id');
 
-      console.log('AppraisalSummary - Loading data...');
-      console.log('Appraiser:', appraiserStr ? 'exists' : 'missing');
-      console.log('Front image:', frontImage ? 'exists' : 'missing');
-      console.log('Side image:', sideImage ? 'exists' : 'missing');
-      console.log('Items:', itemsStr ? 'exists' : 'missing');
-      console.log('RBI:', rbiStr ? 'exists' : 'missing');
-      console.log('Purity:', purityStr ? 'exists' : 'missing');
-
-      if (!appraiserStr || !frontImage || !itemsStr || !rbiStr) {
-        console.error('Missing required data for AppraisalSummary');
-        console.error('Missing items:', {
-          appraiser: !appraiserStr,
-          frontImage: !frontImage,
-          items: !itemsStr,
-          rbi: !rbiStr,
-          purity: !purityStr
-        });
-        showToast('Incomplete appraisal data', 'error');
-        navigate('/appraiser-details');
-        return;
-      }
-
-      // Purity data is optional if coming from RBI Compliance
-      if (!purityStr) {
-        console.warn('No purity data found - user may need to complete purity testing first');
-        showToast('Please complete purity testing first', 'error');
-        navigate('/purity-testing');
-        return;
-      }
-
-      const parsedAppraiser = JSON.parse(appraiserStr);
-      console.log('=== APPRAISER DATA DEBUG ===');
-      console.log('Appraiser object keys:', Object.keys(parsedAppraiser));
-      console.log('Has photo property:', 'photo' in parsedAppraiser);
-      console.log('Photo value type:', typeof parsedAppraiser.photo);
-      console.log('Photo value length:', parsedAppraiser.photo?.length);
-      console.log('Photo starts with:', parsedAppraiser.photo?.substring(0, 100));
-      console.log('Photo is truthy:', !!parsedAppraiser.photo);
-      console.log('Photo is valid base64:', parsedAppraiser.photo?.startsWith('data:image'));
-      console.log('=== END APPRAISER DEBUG ===');
-      
-      // Check if photo is missing or invalid
-      if (!parsedAppraiser.photo || !parsedAppraiser.photo.startsWith('data:image')) {
-        console.warn('⚠️ Appraiser photo missing or invalid');
-        // Try to get from alternative storage
-        const altPhoto = localStorage.getItem('newAppraiserPhoto') || localStorage.getItem('appraiserPhoto');
-        if (altPhoto && altPhoto.startsWith('data:image')) {
-          console.log('✅ Found photo in alternative storage');
-          parsedAppraiser.photo = altPhoto;
-        } else {
-          console.warn('❌ No valid photo found in any storage location');
+        if (!sessionId) {
+          console.error('No session ID found');
+          showToast('Session not found. Please start from the beginning.', 'error');
+          navigate('/appraiser-details');
+          return;
         }
+
+        console.log('AppraisalSummary - Loading data from session:', sessionId);
+
+        // Fetch all session data from API
+        const response = await fetch(`${import.meta.env.VITE_API_URL}/api/session/${sessionId}`);
+
+        if (!response.ok) {
+          throw new Error('Failed to load session data');
+        }
+
+        const sessionData = await response.json();
+        console.log('Session data loaded:', sessionData);
+
+        // Extract and set appraiser data
+        if (sessionData.appraiser_data) {
+          const appraiserData = typeof sessionData.appraiser_data === 'string'
+            ? JSON.parse(sessionData.appraiser_data)
+            : sessionData.appraiser_data;
+          setAppraiser({
+            id: appraiserData.db_id || appraiserData.id,
+            appraiser_id: appraiserData.id,
+            name: appraiserData.name,
+            photo: appraiserData.photo || appraiserData.image
+          });
+        } else {
+          throw new Error('Missing appraiser data');
+        }
+
+        // Extract customer images
+        if (sessionData.customer_front_image) {
+          setCustomerFront(sessionData.customer_front_image);
+        }
+        if (sessionData.customer_side_image) {
+          setCustomerSide(sessionData.customer_side_image);
+        }
+
+        // Extract RBI compliance data
+        if (sessionData.rbi_compliance) {
+          const rbiCompliance = typeof sessionData.rbi_compliance === 'string'
+            ? JSON.parse(sessionData.rbi_compliance)
+            : sessionData.rbi_compliance;
+
+          setRbiData({
+            overallImages: rbiCompliance.overall_images || [],
+            totalItems: sessionData.total_items || rbiCompliance.total_items || 0,
+            capturedItems: rbiCompliance.captured_items || [],
+            captureMethod: rbiCompliance.capture_method || 'overall',
+            timestamp: new Date().toISOString()
+          });
+        } else {
+          // If missing but previously we had fallback logic, we should probably stick to error to be safe
+          // Or at least log it. But to prevent white page, we must either set it or error.
+          throw new Error('Missing RBI compliance data');
+        }
+
+        // Extract jewellery items
+        if (sessionData.jewellery_items) {
+          const items = typeof sessionData.jewellery_items === 'string'
+            ? JSON.parse(sessionData.jewellery_items)
+            : sessionData.jewellery_items;
+          setJewelleryItems(items);
+        }
+
+        // Extract purity results
+        if (sessionData.purity_results) {
+          const purity = typeof sessionData.purity_results === 'string'
+            ? JSON.parse(sessionData.purity_results)
+            : sessionData.purity_results;
+
+          // Handle multi-item purity results
+          if (purity.items && Array.isArray(purity.items)) {
+            // Aggregate results from all items
+            const allRubbingCompleted = purity.items.every((item: any) => item.rubbingCompleted);
+            const allAcidCompleted = purity.items.every((item: any) => item.acidCompleted);
+
+            setPurityResults({
+              rubbingCompleted: allRubbingCompleted,
+              acidCompleted: allAcidCompleted,
+              detectedActivities: [],
+              timestamp: purity.completed_at || new Date().toISOString()
+            });
+          } else {
+            setPurityResults({
+              rubbingCompleted: purity.rubbingCompleted || false,
+              acidCompleted: purity.acidCompleted || false,
+              detectedActivities: purity.detectedActivities || [],
+              timestamp: purity.timestamp || new Date().toISOString()
+            });
+          }
+        } else {
+          console.warn('No purity data found');
+          showToast('Please complete purity testing first', 'error');
+          navigate('/purity-testing');
+          return;
+        }
+
+        // Fetch GPS data
+        fetchGPS();
+
+        setPageLoading(false);
+      } catch (error: any) {
+        console.error('Error loading session data:', error);
+        setLoadError(error?.message || 'Failed to load appraisal data');
+        setPageLoading(false);
+        showToast('Failed to load appraisal data', 'error');
       }
-      
-      setAppraiser(parsedAppraiser);
-      setCustomerFront(frontImage);
-      setCustomerSide(sideImage || '');
-
-      // Debug jewellery items structure
-      const parsedItems = JSON.parse(itemsStr);
-      console.log('=== APPRAISAL SUMMARY DEBUG ===');
-      console.log('Jewellery items count:', parsedItems.length);
-      console.log('First item structure:', parsedItems[0]);
-      console.log('First item keys:', Object.keys(parsedItems[0]));
-      console.log('Has itemNumber property:', 'itemNumber' in parsedItems[0]);
-      console.log('Has image property:', 'image' in parsedItems[0]);
-      console.log('Image value type:', typeof parsedItems[0].image);
-      console.log('Image value length:', parsedItems[0].image?.length);
-      console.log('=== END DEBUG ===');
-
-      setJewelleryItems(parsedItems);
-      setRbiData(JSON.parse(rbiStr));
-      const parsedPurityResults = JSON.parse(purityStr);
-      console.log('Purity results:', parsedPurityResults);
-      setPurityResults(parsedPurityResults);
-      fetchGPS();
     };
 
     loadData();
-  }, [navigate]);
+  }, [navigate, fetchGPS]);
 
 
 
@@ -349,31 +384,42 @@ export function AppraisalSummary() {
     setIsLoading(true);
 
     try {
-      // Save appraisal record before clearing data
-      const appraisalRecord = {
+      // Get session ID
+      const sessionId = localStorage.getItem('appraisal_session_id');
+      if (!sessionId) {
+        throw new Error('No active session found');
+      }
+
+      // Finalize session on backend
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/session/${sessionId}/finalize`, {
+        method: 'POST'
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to finalize session on server');
+      }
+
+      // Save LIGHTWEIGHT record to localStorage (for recent history list only)
+      // EXCLUDING all images to prevent QuotaExceededError
+      const minimalRecord = {
         id: Date.now(),
-        appraiser_name: appraiser.name,
-        appraiser_id: appraiser.appraiser_id,
+        session_id: sessionId,
+        appraiser_name: appraiser?.name || 'Unknown',
+        appraiser_id: appraiser?.appraiser_id || '',
         total_items: jewelleryItems.length,
         purity_testing: purityResults ? `Rubbing: ${purityResults.rubbingCompleted ? 'Yes' : 'No'}, Acid: ${purityResults.acidCompleted ? 'Yes' : 'No'}` : 'Not completed',
         created_at: new Date().toISOString(),
         status: 'completed',
-        jewellery_items: jewelleryItems,
-        purity_results: purityResults,
-        rbi_compliance: rbiData,
-        customer_images: {
-          front: customerFront,
-          side: customerSide
-        }
+        // NO IMAGES stored locally
       };
 
       // Get existing records and add new one
       const existingRecords = JSON.parse(localStorage.getItem('appraisalRecords') || '[]');
-      existingRecords.unshift(appraisalRecord); // Add to beginning
+      existingRecords.unshift(minimalRecord);
 
-      // Keep only last 50 records to prevent storage overflow
-      if (existingRecords.length > 50) {
-        existingRecords.splice(50);
+      // Keep only last 20 records
+      if (existingRecords.length > 20) {
+        existingRecords.splice(20);
       }
 
       localStorage.setItem('appraisalRecords', JSON.stringify(existingRecords));
@@ -381,13 +427,46 @@ export function AppraisalSummary() {
       showToast('Appraisal completed and saved successfully!', 'success');
       clearAppraisalData();
       navigate('/');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error completing appraisal:', error);
-      showToast('Failed to complete appraisal', 'error');
+      showToast(error.message || 'Failed to complete appraisal', 'error');
     } finally {
       setIsLoading(false);
     }
   };
+
+  // Show loading state while fetching data
+  if (pageLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-[hsl(48,50%,99%)] via-[hsl(158,30%,97%)] to-[hsl(320,100%,98%)] flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-lg font-semibold text-gray-700">Loading appraisal data...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show error state if loading failed
+  if (loadError) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-[hsl(48,50%,99%)] via-[hsl(158,30%,97%)] to-[hsl(320,100%,98%)] flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <AlertCircle className="w-8 h-8 text-red-600" />
+          </div>
+          <p className="text-lg font-semibold text-red-700 mb-2">Failed to load data</p>
+          <p className="text-gray-600 mb-4">{loadError}</p>
+          <button
+            onClick={() => navigate('/appraiser-details')}
+            className="px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
+          >
+            Start New Appraisal
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (!appraiser || !rbiData || !purityResults) {
     return null;

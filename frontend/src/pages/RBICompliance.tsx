@@ -91,11 +91,16 @@ export function RBICompliance() {
       return;
     }
 
-    if (!frontImage) {
-      showToast('Please complete customer image capture first', 'error');
-      navigate('/customer-image');
+    // Relaxed check: We no longer check for localStorage image since we use DB session
+    // We assume if they have session_id (checked elsewhere or implied), they are good.
+    // Ideally we should check session status from API, but for now we trust the flow.
+    const sessionId = localStorage.getItem('appraisal_session_id');
+    if (!sessionId) {
+      showToast('Session not active. Starting over.', 'error');
+      navigate('/appraiser-details');
       return;
     }
+
     fetchGPS();
   }, [navigate, fetchGPS]);
 
@@ -284,95 +289,65 @@ export function RBICompliance() {
     setIsLoading(true);
 
     try {
-      console.log('=== SAVING RBI COMPLIANCE DATA ===');
+      // Get session ID from localStorage
+      const sessionId = localStorage.getItem('appraisal_session_id');
+      console.log('Session ID:', sessionId);
+
+      if (!sessionId) {
+        showToast('Session not found. Please start from appraiser details.', 'error');
+        navigate('/appraiser-details');
+        return;
+      }
+
+      console.log('=== SAVING RBI COMPLIANCE DATA TO DATABASE ===');
       console.log('Overall images count:', overallImages.length);
       console.log('Total items:', totalItems);
       console.log('Captured items:', capturedItems.length);
-      console.log('Captured items data:', capturedItems);
       console.log('Validation - hasCompleteOverall:', hasCompleteOverall);
       console.log('Validation - hasCompleteIndividual:', hasCompleteIndividual);
 
-      // Store jewellery items in localStorage
-      console.log('Step 1: Creating jewellery items data...');
-
-      let jewelleryItemsData;
-
-      if (capturedItems.length === totalItems) {
-        // Use individual item images
-        jewelleryItemsData = capturedItems.map((item) => ({
+      // Prepare data for API
+      const rbiData = {
+        overall_images: overallImages.map(img => ({
+          id: img.id,
+          image: img.image,
+          timestamp: img.timestamp
+        })),
+        captured_items: capturedItems.map(item => ({
           itemNumber: item.itemNumber,
           image: item.image,
-          description: `Item ${item.itemNumber}`,
-        }));
-        console.log('Using individual item images:', jewelleryItemsData.length, 'items');
-      } else if (overallImages.length > 0) {
-        // Use overall images for all items
-        const overallImage = overallImages[0].image; // Use first overall image
-        jewelleryItemsData = Array.from({ length: totalItems }, (_, index) => ({
-          itemNumber: index + 1,
-          image: overallImage,
-          description: `Item ${index + 1} (from overall image)`,
-        }));
-        console.log('Using overall image for all items:', jewelleryItemsData.length, 'items');
-      } else {
-        throw new Error('No images available for jewellery items');
-      }
-
-      // Validate jewellery items data
-      if (!jewelleryItemsData || jewelleryItemsData.length === 0) {
-        throw new Error('Failed to create jewellery items data');
-      }
-
-      if (jewelleryItemsData.length !== totalItems) {
-        throw new Error(`Jewellery items count mismatch: expected ${totalItems}, got ${jewelleryItemsData.length}`);
-      }
-
-      console.log('Step 2: Storing jewellery items in localStorage...');
-      localStorage.setItem('jewelleryItems', JSON.stringify(jewelleryItemsData));
-      console.log('✓ Jewellery items stored:', jewelleryItemsData);
-
-      // Store RBI compliance data
-      console.log('Step 3: Creating RBI compliance data...');
-      const rbiComplianceData = {
-        overallImages,
-        totalItems,
-        capturedItems,
-        captureMethod: capturedItems.length === totalItems ? 'individual' : 'overall',
-        timestamp: new Date().toISOString(),
+          description: `Item ${item.itemNumber}`
+        })),
+        total_items: totalItems,
+        capture_method: capturedItems.length === totalItems ? 'individual' : 'overall'
       };
-      console.log('RBI compliance data created');
 
-      console.log('Step 4: Storing RBI compliance in localStorage...');
-      localStorage.setItem('rbiCompliance', JSON.stringify(rbiComplianceData));
-      console.log('✓ RBI compliance stored');
+      // Save to database via API
+      console.log('Sending RBI compliance data to API...');
+      const saveResponse = await fetch(`${import.meta.env.VITE_API_URL}/api/session/${sessionId}/rbi-compliance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(rbiData)
+      });
 
-      console.log('=== DATA STORED SUCCESSFULLY ===');
-      console.log('Jewellery items stored:', jewelleryItemsData.length);
-      console.log('RBI compliance stored');
+      if (!saveResponse.ok) {
+        const errorData = await saveResponse.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Failed to save RBI compliance data');
+      }
 
-      // Verify storage
-      const storedItems = localStorage.getItem('jewelleryItems');
-      const storedRBI = localStorage.getItem('rbiCompliance');
-      console.log('Verification - Items in storage:', storedItems ? 'YES' : 'NO');
-      console.log('Verification - RBI in storage:', storedRBI ? 'YES' : 'NO');
+      const result = await saveResponse.json();
+      console.log('RBI compliance saved to database:', result);
+
+      // Store only minimal data in localStorage for quick access
+      localStorage.setItem('totalItems', totalItems.toString());
 
       showToast('RBI compliance data saved!', 'success');
-
       console.log('=== NAVIGATING TO PURITY TESTING ===');
       navigate('/purity-testing');
     } catch (error: any) {
       console.error('=== ERROR SAVING RBI COMPLIANCE ===');
-      console.error('Error type:', typeof error);
       console.error('Error message:', error?.message);
-      console.error('Error stack:', error?.stack);
       console.error('Full error:', error);
-      console.error('Current state:', {
-        totalItems,
-        overallImagesCount: overallImages.length,
-        capturedItemsCount: capturedItems.length,
-        hasCompleteOverall,
-        hasCompleteIndividual
-      });
       showToast(`Failed to save RBI compliance data: ${error?.message || 'Unknown error'}`, 'error');
     } finally {
       setIsLoading(false);

@@ -121,44 +121,24 @@ class Database:
                 )
             ''')
             
-            # Jewellery items table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS jewellery_items (
-                    id SERIAL PRIMARY KEY,
-                    appraisal_id INTEGER NOT NULL,
-                    item_number INTEGER NOT NULL,
-                    image_data TEXT,
-                    description TEXT,
-                    weight TEXT,
-                    category TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (appraisal_id) REFERENCES appraisals (id) ON DELETE CASCADE
-                )
-            ''')
+
             
-            # RBI compliance table
+            # Appraisal sessions table (for workflow data storage)
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS rbi_compliance (
+                CREATE TABLE IF NOT EXISTS appraisal_sessions (
                     id SERIAL PRIMARY KEY,
-                    appraisal_id INTEGER NOT NULL,
-                    customer_photo TEXT,
-                    id_proof TEXT,
-                    appraiser_with_jewellery TEXT,
+                    session_id TEXT UNIQUE NOT NULL,
+                    appraiser_data TEXT,
+                    customer_front_image TEXT,
+                    customer_side_image TEXT,
+                    rbi_compliance TEXT,
+                    jewellery_items TEXT,
+                    purity_results TEXT,
+                    gps_data TEXT,
+                    total_items INTEGER DEFAULT 0,
+                    status TEXT DEFAULT 'in_progress',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (appraisal_id) REFERENCES appraisals (id) ON DELETE CASCADE
-                )
-            ''')
-            
-            # Purity tests table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS purity_tests (
-                    id SERIAL PRIMARY KEY,
-                    appraisal_id INTEGER NOT NULL,
-                    testing_method TEXT NOT NULL,
-                    purity TEXT NOT NULL,
-                    remarks TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (appraisal_id) REFERENCES appraisals (id) ON DELETE CASCADE
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
@@ -350,86 +330,7 @@ class Database:
             cursor.close()
             conn.close()
     
-    # Jewellery item operations
-    def insert_jewellery_item(self, appraisal_id: int, item_number: int, 
-                             image_data: str, description: str,
-                             weight: Optional[str] = None, 
-                             category: Optional[str] = None) -> int:
-        """Insert jewellery item"""
-        conn = self.get_connection()
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
-        
-        try:
-            cursor.execute('''
-                INSERT INTO jewellery_items 
-                (appraisal_id, item_number, image_data, description, weight, category)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                RETURNING id
-            ''', (appraisal_id, item_number, image_data, description, weight, category))
-            
-            result = cursor.fetchone()
-            item_id = result['id']
-            conn.commit()
-            return item_id
-        except Exception as e:
-            conn.rollback()
-            raise e
-        finally:
-            cursor.close()
-            conn.close()
-    
-    # RBI compliance operations
-    def insert_rbi_compliance(self, appraisal_id: int, customer_photo: str,
-                             id_proof: str, appraiser_with_jewellery: str) -> int:
-        """Insert RBI compliance images"""
-        conn = self.get_connection()
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
-        
-        try:
-            cursor.execute('''
-                INSERT INTO rbi_compliance 
-                (appraisal_id, customer_photo, id_proof, appraiser_with_jewellery)
-                VALUES (%s, %s, %s, %s)
-                RETURNING id
-            ''', (appraisal_id, customer_photo, id_proof, appraiser_with_jewellery))
-            
-            result = cursor.fetchone()
-            compliance_id = result['id']
-            conn.commit()
-            return compliance_id
-        except Exception as e:
-            conn.rollback()
-            raise e
-        finally:
-            cursor.close()
-            conn.close()
-    
-    # Purity test operations
-    def insert_purity_test(self, appraisal_id: int, testing_method: str,
-                          purity: str, remarks: Optional[str] = None) -> int:
-        """Insert purity test results"""
-        conn = self.get_connection()
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
-        
-        try:
-            cursor.execute('''
-                INSERT INTO purity_tests 
-                (appraisal_id, testing_method, purity, remarks)
-                VALUES (%s, %s, %s, %s)
-                RETURNING id
-            ''', (appraisal_id, testing_method, purity, remarks))
-            
-            result = cursor.fetchone()
-            test_id = result['id']
-            conn.commit()
-            return test_id
-        except Exception as e:
-            conn.rollback()
-            raise e
-        finally:
-            cursor.close()
-            conn.close()
-    
+
     # Statistics
     def get_statistics(self) -> Dict[str, Any]:
         """Get appraisal statistics"""
@@ -465,6 +366,161 @@ class Database:
                 "total_appraisers": total_appraisers,
                 "recent_appraisals": [dict(row) for row in recent]
             }
+        finally:
+            cursor.close()
+            conn.close()
+    
+    # =========================================================================
+    # Session Management (for workflow data storage)
+    # =========================================================================
+    
+    def create_session(self) -> str:
+        """Create a new appraisal session and return session_id"""
+        import uuid
+        session_id = str(uuid.uuid4())
+        
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute('''
+                INSERT INTO appraisal_sessions (session_id)
+                VALUES (%s)
+                RETURNING session_id
+            ''', (session_id,))
+            
+            result = cursor.fetchone()
+            conn.commit()
+            return result[0]
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            cursor.close()
+            conn.close()
+    
+    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Get all session data"""
+        conn = self.get_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        try:
+            cursor.execute('''
+                SELECT * FROM appraisal_sessions WHERE session_id = %s
+            ''', (session_id,))
+            
+            row = cursor.fetchone()
+            if row:
+                result = dict(row)
+                # Parse JSON fields
+                for field in ['appraiser_data', 'rbi_compliance', 'jewellery_items', 'purity_results', 'gps_data']:
+                    if result.get(field):
+                        try:
+                            result[field] = json.loads(result[field])
+                        except:
+                            pass
+                return result
+            return None
+        finally:
+            cursor.close()
+            conn.close()
+    
+    def update_session_field(self, session_id: str, field: str, data: Any) -> bool:
+        """Update a specific field in the session"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        # Validate field name to prevent SQL injection
+        valid_fields = ['appraiser_data', 'customer_front_image', 'customer_side_image', 
+                       'rbi_compliance', 'jewellery_items', 'purity_results', 'gps_data', 
+                       'total_items', 'status']
+        if field not in valid_fields:
+            raise ValueError(f"Invalid field: {field}")
+        
+        try:
+            # Convert dict/list to JSON string
+            if isinstance(data, (dict, list)):
+                data = json.dumps(data)
+            
+            cursor.execute(f'''
+                UPDATE appraisal_sessions 
+                SET {field} = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE session_id = %s
+            ''', (data, session_id))
+            
+            affected = cursor.rowcount
+            conn.commit()
+            return affected > 0
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            cursor.close()
+            conn.close()
+    
+    def update_session_multiple(self, session_id: str, updates: Dict[str, Any]) -> bool:
+        """Update multiple fields in the session at once"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        valid_fields = ['appraiser_data', 'customer_front_image', 'customer_side_image', 
+                       'rbi_compliance', 'jewellery_items', 'purity_results', 'gps_data', 
+                       'total_items', 'status']
+        
+        try:
+            set_clauses = []
+            values = []
+            
+            for field, data in updates.items():
+                if field not in valid_fields:
+                    raise ValueError(f"Invalid field: {field}")
+                
+                # Convert dict/list to JSON string
+                if isinstance(data, (dict, list)):
+                    data = json.dumps(data)
+                
+                set_clauses.append(f"{field} = %s")
+                values.append(data)
+            
+            if not set_clauses:
+                return False
+            
+            set_clauses.append("updated_at = CURRENT_TIMESTAMP")
+            values.append(session_id)
+            
+            query = f'''
+                UPDATE appraisal_sessions 
+                SET {", ".join(set_clauses)}
+                WHERE session_id = %s
+            '''
+            
+            cursor.execute(query, values)
+            affected = cursor.rowcount
+            conn.commit()
+            return affected > 0
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            cursor.close()
+            conn.close()
+    
+    def delete_session(self, session_id: str) -> bool:
+        """Delete a session"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute('''
+                DELETE FROM appraisal_sessions WHERE session_id = %s
+            ''', (session_id,))
+            
+            affected = cursor.rowcount
+            conn.commit()
+            return affected > 0
+        except Exception as e:
+            conn.rollback()
+            raise e
         finally:
             cursor.close()
             conn.close()

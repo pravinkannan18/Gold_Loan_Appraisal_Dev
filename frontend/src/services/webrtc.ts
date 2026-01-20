@@ -90,17 +90,17 @@ export class WebRTCService {
             // Get camera stream with optimized constraints for low latency
             const constraints: MediaStreamConstraints = {
                 video: cameraId
-                    ? { 
-                        deviceId: { exact: cameraId }, 
-                        width: { ideal: 640, max: 640 }, 
+                    ? {
+                        deviceId: { exact: cameraId },
+                        width: { ideal: 640, max: 640 },
                         height: { ideal: 480, max: 480 },
                         frameRate: { ideal: 15, max: 20 }
-                      }
-                    : { 
-                        width: { ideal: 640, max: 640 }, 
+                    }
+                    : {
+                        width: { ideal: 640, max: 640 },
                         height: { ideal: 480, max: 480 },
                         frameRate: { ideal: 15, max: 20 }
-                      },
+                    },
                 audio: false
             };
 
@@ -259,17 +259,17 @@ export class WebRTCService {
             // Optimized constraints for low latency
             const constraints: MediaStreamConstraints = {
                 video: cameraId
-                    ? { 
-                        deviceId: { exact: cameraId }, 
-                        width: { ideal: 640, max: 640 }, 
+                    ? {
+                        deviceId: { exact: cameraId },
+                        width: { ideal: 640, max: 640 },
                         height: { ideal: 480, max: 480 },
                         frameRate: { ideal: 15, max: 20 }
-                      }
-                    : { 
-                        width: { ideal: 640, max: 640 }, 
+                    }
+                    : {
+                        width: { ideal: 640, max: 640 },
                         height: { ideal: 480, max: 480 },
                         frameRate: { ideal: 15, max: 20 }
-                      },
+                    },
                 audio: false
             };
 
@@ -334,21 +334,21 @@ export class WebRTCService {
             // Create data channel from CLIENT side (standard WebRTC pattern)
             const statusChannel = pc.createDataChannel('status', { ordered: true });
             console.log('📡 Created data channel from client');
-            
+
             statusChannel.onopen = () => {
                 console.log('📡✅ Status data channel OPENED');
             };
-            
+
             statusChannel.onclose = () => {
                 console.log('📡❌ Status data channel closed');
             };
-            
+
             statusChannel.onmessage = (msgEvent) => {
                 console.log('📡📩 Data channel message received:', msgEvent.data?.substring(0, 100));
                 try {
                     const data = JSON.parse(msgEvent.data);
                     console.log('📡 Parsed data channel message:', JSON.stringify(data));
-                    
+
                     if (data.type === 'status') {
                         console.log('📡 Status update - calling onStatusChange:', !!this.onStatusChange);
                         if (this.onStatusChange) {
@@ -372,7 +372,7 @@ export class WebRTCService {
                     console.error('Failed to parse data channel message:', e, msgEvent.data);
                 }
             };
-            
+
             statusChannel.onerror = (error) => {
                 console.error('📡 Data channel error:', error);
             };
@@ -414,7 +414,7 @@ export class WebRTCService {
             // Status polling causes HTTP requests that interfere with the peer connection
             // For WebRTC, status updates come via data channel
             console.log('✅ WebRTC mode - status polling DISABLED, using data channel');
-            
+
             return this.session;
 
         } catch (error) {
@@ -524,23 +524,47 @@ export class WebRTCService {
 
         if (!this.session) return;
 
+        // Guard against multiple disconnect calls
+        const sessionToCleanup = this.session;
+        this.session = null; // Clear immediately to prevent re-entry
+
+        // Store session ID before clearing session
+        const sessionId = sessionToCleanup.sessionId;
+
+        // Try to delete session on backend (ignore errors)
         try {
-            await fetch(`${API_BASE}/api/webrtc/session/${this.session.sessionId}`, { method: 'DELETE' });
-        } catch { }
-
-        if (this.session.localStream) {
-            this.session.localStream.getTracks().forEach(track => track.stop());
+            await fetch(`${API_BASE}/api/webrtc/session/${sessionId}`, { method: 'DELETE' });
+        } catch {
+            // Ignore - session may already be gone
         }
 
-        if (this.session.websocket) {
-            this.session.websocket.close();
+        // Stop local stream tracks
+        if (sessionToCleanup.localStream) {
+            try {
+                sessionToCleanup.localStream.getTracks().forEach(track => track.stop());
+            } catch {
+                // Ignore
+            }
         }
 
-        if (this.session.peerConnection) {
-            this.session.peerConnection.close();
+        // Close websocket connection
+        if (sessionToCleanup.websocket) {
+            try {
+                sessionToCleanup.websocket.close();
+            } catch {
+                // Ignore
+            }
         }
 
-        this.session = null;
+        // Close peer connection
+        if (sessionToCleanup.peerConnection) {
+            try {
+                sessionToCleanup.peerConnection.close();
+            } catch {
+                // Ignore
+            }
+        }
+
         this.videoElement = null;
         this.canvasElement = null;
         console.log('🔌 Disconnected');

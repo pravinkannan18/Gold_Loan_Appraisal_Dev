@@ -60,7 +60,7 @@ const FacialRecognition = ({ onAppraiserIdentified, onNewAppraiserRequired, onCa
       faceEncoding: "mock_face_encoding_sarah" // In real app, this would be actual face encoding
     },
     {
-      id: "APP002", 
+      id: "APP002",
       name: "Michael Chen",
       licenseNumber: "LIC-2023-002",
       department: "Quality Assurance",
@@ -75,7 +75,7 @@ const FacialRecognition = ({ onAppraiserIdentified, onNewAppraiserRequired, onCa
     {
       id: "APP003",
       name: "Emma Rodriguez",
-      licenseNumber: "LIC-2023-003", 
+      licenseNumber: "LIC-2023-003",
       department: "Regional Assessment",
       email: "emma.rodriguez@bank.com",
       phone: "+1-555-0125",
@@ -157,7 +157,7 @@ const FacialRecognition = ({ onAppraiserIdentified, onNewAppraiserRequired, onCa
           faceEncoding: "real_encoding" // Placeholder
         };
       }
-      
+
       return null;
     } catch (error) {
       console.error('Facial recognition error:', error);
@@ -189,7 +189,7 @@ const FacialRecognition = ({ onAppraiserIdentified, onNewAppraiserRequired, onCa
       } else {
         setAnalysisResult('new_appraiser');
         toast({
-          title: "New Appraiser Detected", 
+          title: "New Appraiser Detected",
           description: "No match found in database. Please provide appraiser details.",
         });
       }
@@ -209,23 +209,72 @@ const FacialRecognition = ({ onAppraiserIdentified, onNewAppraiserRequired, onCa
     }
   };
 
-  const handleProceedWithIdentifiedAppraiser = () => {
+  const handleProceedWithIdentifiedAppraiser = async () => {
     if (identifiedAppraiser) {
-      // Store appraiser info in localStorage
-      localStorage.setItem("currentAppraiser", JSON.stringify({
-        id: identifiedAppraiser.id,
-        appraiser_id: identifiedAppraiser.appraiser_id || identifiedAppraiser.id, // Ensure appraiser_id is available
-        name: identifiedAppraiser.name,
-        licenseNumber: identifiedAppraiser.licenseNumber,
-        department: identifiedAppraiser.department,
-        email: identifiedAppraiser.email,
-        phone: identifiedAppraiser.phone,
-        identificationMethod: "facial_recognition",
-        identificationTimestamp: new Date().toISOString(),
-        profileImage: capturedImage // Use the captured image
-      }));
-      
-      onAppraiserIdentified(identifiedAppraiser);
+      try {
+        // Create a new session for this appraisal workflow
+        console.log('=== CREATING SESSION FOR FACIAL RECOGNITION LOGIN ===');
+        const sessionResponse = await fetch(`${import.meta.env.VITE_API_URL}/api/session/create`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+
+        if (!sessionResponse.ok) {
+          throw new Error('Failed to create appraisal session');
+        }
+
+        const sessionData = await sessionResponse.json();
+        const sessionId = sessionData.session_id;
+        console.log('Session created:', sessionId);
+
+        // Save appraiser data to session
+        const appraiserData = {
+          name: identifiedAppraiser.name,
+          id: identifiedAppraiser.appraiser_id || identifiedAppraiser.id,
+          image: capturedImage || '',
+          timestamp: new Date().toISOString(),
+          photo: capturedImage || ''
+        };
+
+        const saveResponse = await fetch(`${import.meta.env.VITE_API_URL}/api/session/${sessionId}/appraiser`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(appraiserData)
+        });
+
+        if (!saveResponse.ok) {
+          throw new Error('Failed to save appraiser data to session');
+        }
+
+        console.log('Appraiser data saved to session');
+
+        // Store session_id in localStorage
+        localStorage.setItem('appraisal_session_id', sessionId);
+
+        // Store appraiser info in localStorage (minimal data for quick access)
+        localStorage.setItem("currentAppraiser", JSON.stringify({
+          id: identifiedAppraiser.id,
+          appraiser_id: identifiedAppraiser.appraiser_id || identifiedAppraiser.id,
+          name: identifiedAppraiser.name,
+          licenseNumber: identifiedAppraiser.licenseNumber,
+          department: identifiedAppraiser.department,
+          email: identifiedAppraiser.email,
+          phone: identifiedAppraiser.phone,
+          identificationMethod: "facial_recognition",
+          identificationTimestamp: new Date().toISOString(),
+          session_id: sessionId,
+          photo: capturedImage // Keep photo for local display
+        }));
+
+        onAppraiserIdentified(identifiedAppraiser);
+      } catch (error) {
+        console.error('Error creating session:', error);
+        toast({
+          title: "Error",
+          description: "Failed to start appraisal session. Please try again.",
+          variant: "destructive",
+        });
+      }
     }
   };
 
@@ -251,14 +300,14 @@ const FacialRecognition = ({ onAppraiserIdentified, onNewAppraiserRequired, onCa
               {analysisMessage}
             </p>
           )}
-          
+
           <div className="w-full max-w-md mx-auto">
             <div className="flex justify-between text-sm text-gray-500 mb-2">
               <span>Progress</span>
               <span>{analysisProgress}%</span>
             </div>
             <div className="w-full bg-gray-200 rounded-full h-3">
-              <div 
+              <div
                 className="bg-gradient-to-r from-blue-500 to-purple-600 h-3 rounded-full transition-all duration-1000 ease-out"
                 style={{ width: `${analysisProgress}%` }}
               />
@@ -269,9 +318,9 @@ const FacialRecognition = ({ onAppraiserIdentified, onNewAppraiserRequired, onCa
         {capturedImage && (
           <div className="flex justify-center">
             <div className="relative">
-              <img 
-                src={capturedImage} 
-                alt="Captured for analysis" 
+              <img
+                src={capturedImage}
+                alt="Captured for analysis"
                 className="w-32 h-32 rounded-lg object-cover border-2 border-blue-300"
               />
               <div className="absolute inset-0 border-2 border-blue-500 rounded-lg animate-pulse" />
@@ -300,8 +349,8 @@ const FacialRecognition = ({ onAppraiserIdentified, onNewAppraiserRequired, onCa
         <Card className="max-w-md mx-auto">
           <CardHeader className="text-center pb-4">
             <div className="w-24 h-24 mx-auto mb-3 rounded-full overflow-hidden border-4 border-green-200">
-              <img 
-                src={capturedImage || identifiedAppraiser.profileImage} 
+              <img
+                src={capturedImage || identifiedAppraiser.profileImage}
                 alt={identifiedAppraiser.name}
                 className="w-full h-full object-cover"
               />
@@ -335,7 +384,7 @@ const FacialRecognition = ({ onAppraiserIdentified, onNewAppraiserRequired, onCa
           <Button onClick={onCancel} variant="outline">
             Cancel
           </Button>
-          <Button 
+          <Button
             onClick={handleProceedWithIdentifiedAppraiser}
             className="bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700"
           >
@@ -365,9 +414,9 @@ const FacialRecognition = ({ onAppraiserIdentified, onNewAppraiserRequired, onCa
         {capturedImage && (
           <div className="flex justify-center">
             <div className="relative">
-              <img 
-                src={capturedImage} 
-                alt="New appraiser photo" 
+              <img
+                src={capturedImage}
+                alt="New appraiser photo"
                 className="w-32 h-32 rounded-lg object-cover border-2 border-orange-300"
               />
             </div>
@@ -387,7 +436,7 @@ const FacialRecognition = ({ onAppraiserIdentified, onNewAppraiserRequired, onCa
           <Button onClick={onCancel} variant="outline">
             Cancel
           </Button>
-          <Button 
+          <Button
             onClick={handleRegisterNewAppraiser}
             className="bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700"
           >
@@ -435,7 +484,7 @@ const FacialRecognition = ({ onAppraiserIdentified, onNewAppraiserRequired, onCa
         <Button onClick={onCancel} variant="outline">
           Cancel
         </Button>
-        <Button 
+        <Button
           onClick={() => cameraRef.current?.capturePhoto()}
           className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700"
         >

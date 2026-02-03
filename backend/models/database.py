@@ -1509,12 +1509,17 @@ class Database:
     def verify_appraiser_exists_in_bank_branch(self, name: str, bank_id: int, branch_id: int) -> Optional[Dict[str, Any]]:
         """
         Verify if an appraiser with given name exists and is mapped to the bank/branch.
+        
+        IMPORTANT: This method handles cases where multiple appraisers may have the same name
+        across different banks/branches. It checks ALL appraisers with the given name and
+        returns the one that is mapped to the requested bank/branch.
+        
         First checks the mapping table, then falls back to direct registration check.
         """
         conn = self.get_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         try:
-            # First, try to find appraiser by name in overall_sessions
+            # Find ALL appraisers with this name (there may be multiple across different banks)
             cursor.execute('''
                 SELECT os.id, os.appraiser_id, os.name, os.email, os.phone, 
                        os.bank_id, os.branch_id, os.created_at, os.face_encoding, os.image_data
@@ -1522,53 +1527,56 @@ class Database:
                 WHERE os.status = 'registered' AND LOWER(os.name) = LOWER(%s)
             ''', (name.strip(),))
             
-            appraiser = cursor.fetchone()
+            appraisers = cursor.fetchall()
             
-            if not appraiser:
+            if not appraisers:
                 return None
             
-            # Check if appraiser is mapped to the requested bank/branch
-            cursor.execute('''
-                SELECT 1 FROM appraiser_bank_branch_map
-                WHERE appraiser_id = %s AND bank_id = %s AND branch_id = %s AND is_active = true
-            ''', (appraiser['appraiser_id'], bank_id, branch_id))
-            
-            is_mapped = cursor.fetchone() is not None
-            
-            # If not in mapping table, check if directly registered to this bank/branch
-            if not is_mapped:
-                if appraiser['bank_id'] == bank_id and appraiser['branch_id'] == branch_id:
-                    is_mapped = True
-                    # Auto-create mapping for existing registrations
-                    cursor.execute('''
-                        INSERT INTO appraiser_bank_branch_map (appraiser_id, bank_id, branch_id)
-                        VALUES (%s, %s, %s)
-                        ON CONFLICT (appraiser_id, bank_id, branch_id) DO NOTHING
-                    ''', (appraiser['appraiser_id'], bank_id, branch_id))
-                    conn.commit()
-            
-            if is_mapped:
-                # Get bank and branch names
-                cursor.execute('SELECT bank_name FROM banks WHERE id = %s', (bank_id,))
-                bank_row = cursor.fetchone()
-                cursor.execute('SELECT branch_name FROM branches WHERE id = %s', (branch_id,))
-                branch_row = cursor.fetchone()
+            # Check each appraiser to find one mapped to the requested bank/branch
+            for appraiser in appraisers:
+                # Check if this appraiser is mapped to the requested bank/branch via mapping table
+                cursor.execute('''
+                    SELECT 1 FROM appraiser_bank_branch_map
+                    WHERE appraiser_id = %s AND bank_id = %s AND branch_id = %s AND is_active = true
+                ''', (appraiser['appraiser_id'], bank_id, branch_id))
                 
-                return {
-                    'id': appraiser['id'],
-                    'appraiser_id': appraiser['appraiser_id'],
-                    'name': appraiser['name'],
-                    'email': appraiser['email'],
-                    'phone': appraiser['phone'],
-                    'bank_id': bank_id,
-                    'branch_id': branch_id,
-                    'bank_name': bank_row['bank_name'] if bank_row else None,
-                    'branch_name': branch_row['branch_name'] if branch_row else None,
-                    'has_face_encoding': bool(appraiser['face_encoding']),
-                    'has_image': bool(appraiser['image_data']),
-                    'timestamp': str(appraiser['created_at']) if appraiser['created_at'] else None
-                }
+                is_mapped = cursor.fetchone() is not None
+                
+                # If not in mapping table, check if directly registered to this bank/branch
+                if not is_mapped:
+                    if appraiser['bank_id'] == bank_id and appraiser['branch_id'] == branch_id:
+                        is_mapped = True
+                        # Auto-create mapping for existing registrations
+                        cursor.execute('''
+                            INSERT INTO appraiser_bank_branch_map (appraiser_id, bank_id, branch_id)
+                            VALUES (%s, %s, %s)
+                            ON CONFLICT (appraiser_id, bank_id, branch_id) DO NOTHING
+                        ''', (appraiser['appraiser_id'], bank_id, branch_id))
+                        conn.commit()
+                
+                if is_mapped:
+                    # Get bank and branch names
+                    cursor.execute('SELECT bank_name FROM banks WHERE id = %s', (bank_id,))
+                    bank_row = cursor.fetchone()
+                    cursor.execute('SELECT branch_name FROM branches WHERE id = %s', (branch_id,))
+                    branch_row = cursor.fetchone()
+                    
+                    return {
+                        'id': appraiser['id'],
+                        'appraiser_id': appraiser['appraiser_id'],
+                        'name': appraiser['name'],
+                        'email': appraiser['email'],
+                        'phone': appraiser['phone'],
+                        'bank_id': bank_id,
+                        'branch_id': branch_id,
+                        'bank_name': bank_row['bank_name'] if bank_row else None,
+                        'branch_name': branch_row['branch_name'] if branch_row else None,
+                        'has_face_encoding': bool(appraiser['face_encoding']),
+                        'has_image': bool(appraiser['image_data']),
+                        'timestamp': str(appraiser['created_at']) if appraiser['created_at'] else None
+                    }
             
+            # No appraiser with this name is mapped to the requested bank/branch
             return None
         finally:
             cursor.close()

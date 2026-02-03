@@ -10,6 +10,7 @@ from models.database import get_db
 from schemas.tenant import BranchCreate, BranchUpdate, BranchResponse
 from routers.super_admin import validate_super_admin_token
 import logging
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +195,14 @@ async def create_branch(
             raise HTTPException(status_code=400, detail="Branch code already exists for this bank")
         
         # Create branch
+        operational_hours_json = "{}"
+        if branch.operational_hours:
+            try:
+                operational_hours_json = json.dumps(branch.operational_hours.model_dump())
+            except:
+                # Fallback to dict() for older Pydantic versions
+                operational_hours_json = json.dumps(branch.operational_hours.dict())
+        
         cursor.execute("""
             INSERT INTO branches (bank_id, branch_code, branch_name, branch_address,
                                 branch_city, branch_state, branch_pincode, contact_email,
@@ -204,7 +213,7 @@ async def create_branch(
             branch.bank_id, branch.branch_code, branch.branch_name, branch.branch_address,
             branch.branch_city, branch.branch_state, branch.branch_pincode,
             branch.contact_email, branch.contact_phone, branch.manager_name,
-            branch.operational_hours or {}
+            operational_hours_json
         ))
         
         result = cursor.fetchone()
@@ -212,6 +221,14 @@ async def create_branch(
         cursor.close()
         
         # Return created branch
+        operational_hours_dict = {}
+        if branch.operational_hours:
+            try:
+                operational_hours_dict = branch.operational_hours.model_dump()
+            except:
+                # Fallback to dict() for older Pydantic versions
+                operational_hours_dict = branch.operational_hours.dict()
+                
         created_branch = BranchResponse(
             id=result[0],
             bank_id=branch.bank_id,
@@ -224,7 +241,7 @@ async def create_branch(
             contact_email=branch.contact_email,
             contact_phone=branch.contact_phone,
             manager_name=branch.manager_name,
-            operational_hours=branch.operational_hours or {},
+            operational_hours=operational_hours_dict,
             is_active=True,
             created_at=result[1]
         )
@@ -285,7 +302,12 @@ async def update_branch(
             update_values.append(branch.manager_name)
         if branch.operational_hours is not None:
             update_fields.append("operational_hours = %s")
-            update_values.append(branch.operational_hours)
+            try:
+                operational_hours_json = json.dumps(branch.operational_hours.model_dump())
+            except:
+                # Fallback to dict() for older Pydantic versions  
+                operational_hours_json = json.dumps(branch.operational_hours.dict())
+            update_values.append(operational_hours_json)
         if branch.is_active is not None:
             update_fields.append("is_active = %s")
             update_values.append(branch.is_active)

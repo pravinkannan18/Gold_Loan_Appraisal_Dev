@@ -87,7 +87,7 @@ export function CustomerImage() {
             const sessionId = localStorage.getItem('appraisal_session_id');
             if (!sessionId) {
                 showToast('Session not found. Please start over.', 'error');
-                navigate('/appraiser-details');
+                navigate('/dashboard');
                 return;
             }
 
@@ -255,7 +255,7 @@ export function CustomerImage() {
                         <div className="flex items-center justify-between">
                             <Button
                                 variant="outline"
-                                onClick={() => navigate('/appraiser-details')}
+                                onClick={() => navigate('/dashboard')}
                                 className="gap-2"
                             >
                                 <ArrowLeft className="w-4 h-4" />

@@ -964,58 +964,431 @@ class AppraiserVerificationResponse(BaseModel):
 @router.post("/verify-appraiser", response_model=AppraiserVerificationResponse)
 async def verify_appraiser(request: AppraiserVerificationRequest, db: Session = Depends(get_db)) -> AppraiserVerificationResponse:
     """
-    Verify if an appraiser exists in the specified bank and branch
+    Verify if an appraiser exists and is mapped to the specified bank and branch.
+    
+    This endpoint:
+    1. First checks if appraiser exists in the system by name
+    2. Then verifies if they are mapped to the requested bank/branch
+    3. Supports appraisers working in multiple banks/branches via mapping table
     
     - **name**: Appraiser's full name
-    - **bank_id**: Bank ID where appraiser should be registered
-    - **branch_id**: Branch ID where appraiser should be registered
+    - **bank_id**: Bank ID where appraiser should be authorized
+    - **branch_id**: Branch ID where appraiser should be authorized
     
-    Returns verification result and appraiser details if found
+    Returns verification result and appraiser details if found and mapped
     """
     try:
-        cursor = db.cursor()
+        from models.database import Database
+        database = Database()
         
-        # Search for appraiser in the specified bank and branch
-        cursor.execute("""
-            SELECT ad.id, ad.appraiser_id, ad.name, ad.email, ad.phone, 
-                   ad.bank_id, ad.branch_id, ad.created_at,
-                   b.bank_name, br.branch_name
-            FROM appraiser_details ad
-            LEFT JOIN banks b ON ad.bank_id = b.id
-            LEFT JOIN branches br ON ad.branch_id = br.id
-            WHERE LOWER(ad.name) = LOWER(%s)
-            AND ad.bank_id = %s
-            AND ad.branch_id = %s
-        """, (request.name.strip(), request.bank_id, request.branch_id))
+        # Use the new verification method that checks mapping table
+        appraiser_data = database.verify_appraiser_exists_in_bank_branch(
+            name=request.name.strip(),
+            bank_id=request.bank_id,
+            branch_id=request.branch_id
+        )
         
-        row = cursor.fetchone()
-        cursor.close()
-        
-        if row:
-            appraiser_data = {
-                "id": row[0],
-                "appraiser_id": row[1],
-                "name": row[2],
-                "email": row[3],
-                "phone": row[4],
-                "bank_id": row[5],
-                "branch_id": row[6],
-                "created_at": str(row[7]) if row[7] else None,
-                "bank_name": row[8],
-                "branch_name": row[9]
-            }
-            
+        if appraiser_data:
             return AppraiserVerificationResponse(
                 exists=True,
-                message=f"Appraiser '{request.name}' is registered in {row[8]} - {row[9]}",
+                message=f"Appraiser '{request.name}' is authorized for {appraiser_data['bank_name']} - {appraiser_data['branch_name']}",
                 appraiser=appraiser_data
             )
         else:
-            return AppraiserVerificationResponse(
-                exists=False,
-                message=f"Appraiser '{request.name}' is not registered in the selected bank and branch. Only branch admin can add appraisers to this system."
-            )
+            # Check if appraiser exists but not mapped to this bank/branch
+            cursor = db.cursor()
+            cursor.execute("""
+                SELECT os.name, b.bank_name, br.branch_name 
+                FROM overall_sessions os
+                LEFT JOIN banks b ON os.bank_id = b.id
+                LEFT JOIN branches br ON os.branch_id = br.id
+                WHERE os.status = 'registered' AND LOWER(os.name) = LOWER(%s)
+                LIMIT 1
+            """, (request.name.strip(),))
+            existing = cursor.fetchone()
+            cursor.close()
+            
+            if existing:
+                return AppraiserVerificationResponse(
+                    exists=False,
+                    message=f"Appraiser '{request.name}' exists but is not authorized for the selected bank/branch. They are registered at {existing[1]} - {existing[2]}. Contact Branch Admin to add authorization."
+                )
+            else:
+                return AppraiserVerificationResponse(
+                    exists=False,
+                    message=f"Appraiser '{request.name}' is not registered in the system. Only Branch Admin can register new appraisers."
+                )
         
     except Exception as e:
         logger.error(f"Error verifying appraiser: {e}")
         raise HTTPException(status_code=500, detail=f"Error verifying appraiser: {str(e)}")
+
+# ============================================================================
+# Appraiser Bank/Branch Mapping Endpoints
+# ============================================================================
+
+class AppraiserMappingRequest(BaseModel):
+    """Request model for appraiser bank/branch mapping"""
+    appraiser_id: str
+    bank_id: int
+    branch_id: int
+
+@router.post("/appraiser-mapping")
+async def add_appraiser_mapping(request: AppraiserMappingRequest, db: Session = Depends(get_db)):
+    """
+    Add an appraiser to a bank/branch mapping.
+    Allows the same appraiser to work at multiple banks/branches.
+    """
+    try:
+        from models.database import Database
+        database = Database()
+        
+        # Verify the appraiser exists
+        appraiser = database.get_appraiser_by_id(request.appraiser_id)
+        if not appraiser:
+            raise HTTPException(status_code=404, detail=f"Appraiser '{request.appraiser_id}' not found")
+        
+        # Add the mapping
+        database.add_appraiser_to_bank_branch(request.appraiser_id, request.bank_id, request.branch_id)
+        
+        return {
+            "success": True,
+            "message": f"Appraiser mapped to bank {request.bank_id}, branch {request.branch_id}"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error adding appraiser mapping: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/appraiser-mapping")
+async def remove_appraiser_mapping(request: AppraiserMappingRequest, db: Session = Depends(get_db)):
+    """
+    Remove an appraiser from a bank/branch mapping.
+    """
+    try:
+        from models.database import Database
+        database = Database()
+        
+        database.remove_appraiser_from_bank_branch(request.appraiser_id, request.bank_id, request.branch_id)
+        
+        return {
+            "success": True,
+            "message": f"Appraiser mapping removed from bank {request.bank_id}, branch {request.branch_id}"
+        }
+    except Exception as e:
+        logger.error(f"Error removing appraiser mapping: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/appraiser-mappings/{appraiser_id}")
+async def get_appraiser_mappings(appraiser_id: str, db: Session = Depends(get_db)):
+    """
+    Get all bank/branch mappings for an appraiser.
+    """
+    try:
+        from models.database import Database
+        database = Database()
+        
+        mappings = database.get_appraiser_bank_branch_mappings(appraiser_id)
+        
+        return {
+            "appraiser_id": appraiser_id,
+            "mappings": mappings,
+            "total_mappings": len(mappings)
+        }
+    except Exception as e:
+        logger.error(f"Error getting appraiser mappings: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/branch-appraisers/{bank_id}/{branch_id}")
+async def get_branch_appraisers(bank_id: int, branch_id: int, db: Session = Depends(get_db)):
+    """
+    Get all appraisers mapped to a specific bank/branch.
+    """
+    try:
+        from models.database import Database
+        database = Database()
+        
+        appraisers = database.get_appraisers_for_bank_branch(bank_id, branch_id)
+        
+        return {
+            "bank_id": bank_id,
+            "branch_id": branch_id,
+            "appraisers": appraisers,
+            "total_appraisers": len(appraisers)
+        }
+    except Exception as e:
+        logger.error(f"Error getting branch appraisers: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# RBAC Appraiser Management Endpoints
+# ============================================================================
+
+class AppraiserListRequest(BaseModel):
+    """Request model for listing appraisers with RBAC"""
+    role: str  # 'super_admin', 'bank_admin', 'branch_admin'
+    bank_id: Optional[int] = None
+    branch_id: Optional[int] = None
+
+@router.post("/appraisers/list")
+async def list_appraisers_rbac(request: AppraiserListRequest, db: Session = Depends(get_db)):
+    """
+    List appraisers with role-based access control.
+    
+    - Super Admin: Can view all appraisers across all banks and branches
+    - Bank Admin: Can view appraisers only in their bank (all branches)
+    - Branch Admin: Can view appraisers only in their specific branch
+    """
+    try:
+        from models.database import Database
+        database = Database()
+        
+        cursor = db.cursor()
+        
+        # Build query based on role
+        base_query = """
+            SELECT DISTINCT
+                os.id, os.name, os.appraiser_id, os.email, os.phone, os.created_at,
+                os.bank_id, os.branch_id, os.image_data,
+                b.bank_name, b.bank_code,
+                br.branch_name, br.branch_code,
+                CASE WHEN os.face_encoding IS NOT NULL THEN true ELSE false END as has_face_encoding,
+                (SELECT COUNT(*) FROM overall_sessions s 
+                 WHERE s.appraiser_id = os.appraiser_id AND s.status != 'registered') as appraisals_completed
+            FROM overall_sessions os
+            LEFT JOIN banks b ON os.bank_id = b.id
+            LEFT JOIN branches br ON os.branch_id = br.id
+            WHERE os.status = 'registered'
+        """
+        
+        params = []
+        
+        if request.role == 'super_admin':
+            # Super Admin: No additional filters - can see all
+            pass
+        elif request.role == 'bank_admin':
+            # Bank Admin: Filter by bank_id
+            if not request.bank_id:
+                raise HTTPException(status_code=400, detail="bank_id is required for bank_admin role")
+            base_query += " AND os.bank_id = %s"
+            params.append(request.bank_id)
+        elif request.role == 'branch_admin':
+            # Branch Admin: Filter by branch_id
+            if not request.branch_id:
+                raise HTTPException(status_code=400, detail="branch_id is required for branch_admin role")
+            base_query += " AND os.branch_id = %s"
+            params.append(request.branch_id)
+        else:
+            raise HTTPException(status_code=400, detail=f"Invalid role: {request.role}")
+        
+        base_query += " ORDER BY os.created_at DESC"
+        
+        cursor.execute(base_query, params)
+        rows = cursor.fetchall()
+        cursor.close()
+        
+        appraisers = [
+            {
+                "id": row[0],
+                "name": row[1],
+                "appraiser_id": row[2],
+                "email": row[3],
+                "phone": row[4],
+                "created_at": str(row[5]) if row[5] else None,
+                "bank_id": row[6],
+                "branch_id": row[7],
+                "image_data": row[8],
+                "bank_name": row[9],
+                "bank_code": row[10],
+                "branch_name": row[11],
+                "branch_code": row[12],
+                "has_face_encoding": row[13],
+                "appraisals_completed": row[14] or 0
+            }
+            for row in rows
+        ]
+        
+        return {
+            "success": True,
+            "appraisers": appraisers,
+            "total_count": len(appraisers),
+            "role": request.role,
+            "filtered_by": {
+                "bank_id": request.bank_id,
+                "branch_id": request.branch_id
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error listing appraisers with RBAC: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/appraisers/all")
+async def get_all_appraisers(
+    role: str,
+    bank_id: Optional[int] = None,
+    branch_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    GET endpoint for listing appraisers with role-based access control.
+    Query parameters: role (required), bank_id (for bank_admin), branch_id (for branch_admin)
+    """
+    try:
+        cursor = db.cursor()
+        
+        # Build query based on role
+        base_query = """
+            SELECT DISTINCT
+                os.id, os.name, os.appraiser_id, os.email, os.phone, os.created_at,
+                os.bank_id, os.branch_id, os.image_data,
+                b.bank_name, b.bank_code,
+                br.branch_name, br.branch_code,
+                CASE WHEN os.face_encoding IS NOT NULL THEN true ELSE false END as has_face_encoding,
+                (SELECT COUNT(*) FROM overall_sessions s 
+                 WHERE s.appraiser_id = os.appraiser_id AND s.status != 'registered') as appraisals_completed
+            FROM overall_sessions os
+            LEFT JOIN banks b ON os.bank_id = b.id
+            LEFT JOIN branches br ON os.branch_id = br.id
+            WHERE os.status = 'registered'
+        """
+        
+        params = []
+        
+        if role == 'super_admin':
+            # Super Admin: No additional filters
+            pass
+        elif role == 'bank_admin':
+            if not bank_id:
+                raise HTTPException(status_code=400, detail="bank_id is required for bank_admin role")
+            base_query += " AND os.bank_id = %s"
+            params.append(bank_id)
+        elif role == 'branch_admin':
+            if not branch_id:
+                raise HTTPException(status_code=400, detail="branch_id is required for branch_admin role")
+            base_query += " AND os.branch_id = %s"
+            params.append(branch_id)
+        else:
+            raise HTTPException(status_code=400, detail=f"Invalid role: {role}")
+        
+        base_query += " ORDER BY os.created_at DESC"
+        
+        cursor.execute(base_query, params)
+        rows = cursor.fetchall()
+        cursor.close()
+        
+        appraisers = [
+            {
+                "id": row[0],
+                "name": row[1],
+                "appraiser_id": row[2],
+                "email": row[3],
+                "phone": row[4],
+                "created_at": str(row[5]) if row[5] else None,
+                "bank_id": row[6],
+                "branch_id": row[7],
+                "image_data": row[8],
+                "bank_name": row[9],
+                "bank_code": row[10],
+                "branch_name": row[11],
+                "branch_code": row[12],
+                "has_face_encoding": row[13],
+                "appraisals_completed": row[14] or 0
+            }
+            for row in rows
+        ]
+        
+        return {
+            "success": True,
+            "appraisers": appraisers,
+            "total_count": len(appraisers)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting appraisers: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# Banks and Branches Endpoints
+# ============================================================================
+
+@router.get("/banks")
+async def get_banks(db: Session = Depends(get_db)):
+    """Get all banks"""
+    try:
+        cursor = db.cursor()
+        cursor.execute("""
+            SELECT id, bank_name, bank_code, headquarters_address, created_at, is_active
+            FROM banks
+            WHERE is_active = true
+            ORDER BY bank_name
+        """)
+        
+        rows = cursor.fetchall()
+        cursor.close()
+        
+        banks = [
+            {
+                "id": row[0],
+                "bank_name": row[1],
+                "bank_code": row[2],
+                "bank_address": row[3],
+                "created_at": str(row[4]) if row[4] else None,
+                "is_active": row[5]
+            }
+            for row in rows
+        ]
+        
+        return {"banks": banks}
+        
+    except Exception as e:
+        logger.error(f"Error getting banks: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting banks: {str(e)}")
+
+@router.get("/branches")
+async def get_branches(bank_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Get all branches, optionally filtered by bank_id"""
+    try:
+        cursor = db.cursor()
+        
+        if bank_id:
+            cursor.execute("""
+                SELECT id, branch_name, branch_code, branch_address, bank_id, created_at, is_active
+                FROM branches
+                WHERE bank_id = %s AND is_active = true
+                ORDER BY branch_name
+            """, (bank_id,))
+        else:
+            cursor.execute("""
+                SELECT id, branch_name, branch_code, branch_address, bank_id, created_at, is_active
+                FROM branches
+                WHERE is_active = true
+                ORDER BY branch_name
+            """)
+        
+        rows = cursor.fetchall()
+        cursor.close()
+        
+        branches = [
+            {
+                "id": row[0],
+                "branch_name": row[1],
+                "branch_code": row[2],
+                "branch_address": row[3],
+                "bank_id": row[4],
+                "created_at": str(row[5]) if row[5] else None,
+                "is_active": row[6]
+            }
+            for row in rows
+        ]
+        
+        return {"branches": branches}
+        
+    except Exception as e:
+        logger.error(f"Error getting branches: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting branches: {str(e)}")

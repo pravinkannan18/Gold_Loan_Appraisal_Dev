@@ -70,7 +70,7 @@ const NewAppraisal = () => {
     });
 
     // Navigate to appraiser details (or facial recognition)
-    navigate("/appraiser-details");
+    navigate("/customer-image");
   };
 
   const canStartAppraisal = selectedTenant.bank && selectedTenant.user;

@@ -10,7 +10,6 @@ import Dashboard from "./pages/Dashboard";
 import TenantManagement from "./pages/TenantManagement";
 import Admin from "./pages/Admin";
 import NewAppraisal from "./pages/NewAppraisal";
-import { AppraiserDetails } from "./pages/AppraiserDetails";
 import { CustomerImage } from './pages/CustomerImage';
 import { RBICompliance } from "./pages/RBICompliance";
 import WebRTCPurityTesting from "./pages/WebRTCPurityTesting";
@@ -41,7 +40,6 @@ const App = () => (
             <Route path="/admin" element={<Admin />} />
             <Route path="/camera-settings" element={<CameraSettings />} />
             <Route path="/new-appraisal" element={<NewAppraisal />} />
-            <Route path="/appraiser-details" element={<AppraiserDetails />} />
             <Route path="/bank-branch-admin" element={<BankBranchAdministration />} />
             <Route path="/customer-image" element={<CustomerImage />} />
             <Route path="/rbi-compliance" element={<RBICompliance />} />

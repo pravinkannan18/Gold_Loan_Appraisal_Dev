@@ -11,19 +11,17 @@ export function StepIndicator({ currentStep, showIndividualStep = true }: StepIn
   const navigate = useNavigate();
   const steps = showIndividualStep
     ? [
-        { key: 1, label: "Appraiser", icon: User, route: "/appraiser-details", enabled: true },
-        { key: 2, label: "Customer image", icon: Camera, route: "/camera-test?stage=customer", enabled: true },
-        { key: 3, label: "RBI", icon: Shield, route: "/rbi-compliance", enabled: true },
-        { key: 4, label: "Individual image", icon: Camera, route: "/camera-test?stage=individual", enabled: true },
-        { key: 5, label: "Purity", icon: FlaskConical, route: "/purity-testing", enabled: true },
-        { key: 6, label: "Summary", icon: FileText, route: "/appraisal-summary", enabled: true },
-      ]
-    : [
-        { key: 1, label: "Appraiser", icon: User, route: "/appraiser-details", enabled: true },
-        { key: 2, label: "Customer image", icon: Camera, route: "/camera-test?stage=customer", enabled: true },
-        { key: 3, label: "RBI", icon: Shield, route: "/rbi-compliance", enabled: true },
+        { key: 1, label: "Customer image", icon: Camera, route: "/camera-test?stage=customer", enabled: true },
+        { key: 2, label: "RBI", icon: Shield, route: "/rbi-compliance", enabled: true },
+        { key: 3, label: "Individual image", icon: Camera, route: "/camera-test?stage=individual", enabled: true },
         { key: 4, label: "Purity", icon: FlaskConical, route: "/purity-testing", enabled: true },
         { key: 5, label: "Summary", icon: FileText, route: "/appraisal-summary", enabled: true },
+      ]
+    : [
+        { key: 1, label: "Customer image", icon: Camera, route: "/camera-test?stage=customer", enabled: true },
+        { key: 2, label: "RBI", icon: Shield, route: "/rbi-compliance", enabled: true },
+        { key: 3, label: "Purity", icon: FlaskConical, route: "/purity-testing", enabled: true },
+        { key: 4, label: "Summary", icon: FileText, route: "/appraisal-summary", enabled: true },
       ];
 
   return (

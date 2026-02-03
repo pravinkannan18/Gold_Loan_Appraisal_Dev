@@ -236,31 +236,100 @@ async def update_bank(
 @router.delete("/{bank_id}")
 async def delete_bank(
     bank_id: int, 
+    force: bool = False,
     db: Session = Depends(get_db),
     _: bool = Depends(require_super_admin)
 ):
-    """Delete a bank - SUPER ADMIN ONLY"""
+    """Delete a bank - SUPER ADMIN ONLY
+    
+    Args:
+        bank_id: ID of bank to delete
+        force: If True, deletes bank and all associated branches/data (cascade delete)
+    """
     try:
         cursor = db.cursor()
         
         # Check if bank exists
-        cursor.execute("SELECT id FROM banks WHERE id = %s", (bank_id,))
-        if not cursor.fetchone():
+        cursor.execute("SELECT id, bank_name FROM banks WHERE id = %s", (bank_id,))
+        bank_row = cursor.fetchone()
+        if not bank_row:
             raise HTTPException(status_code=404, detail="Bank not found")
+        
+        bank_name = bank_row[1]
         
         # Check if bank has branches
         cursor.execute("SELECT COUNT(*) FROM branches WHERE bank_id = %s", (bank_id,))
         branch_count = cursor.fetchone()[0]
-        if branch_count > 0:
-            raise HTTPException(status_code=400, detail=f"Cannot delete bank with {branch_count} branches")
         
-        # Delete bank
+        if branch_count > 0 and not force:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Cannot delete bank '{bank_name}' with {branch_count} branches. Use force=true to cascade delete all associated data."
+            )
+        
+        if force and branch_count > 0:
+            # Cascade delete all associated data
+            logger.info(f"Force deleting bank {bank_id} with {branch_count} branches")
+            
+            # Get all branch IDs for this bank
+            cursor.execute("SELECT id FROM branches WHERE bank_id = %s", (bank_id,))
+            branch_ids = [row[0] for row in cursor.fetchall()]
+            
+            if branch_ids:
+                branch_ids_str = ','.join(map(str, branch_ids))
+                
+                # Delete in correct order due to foreign key constraints
+                # Use individual operations with error handling for each table
+                
+                tables_to_clean = [
+                    ("overall_sessions", "session data"),
+                    ("appraiser_details", "appraiser data"), 
+                    ("customer_details", "customer data"),
+                    ("rbi_compliance_details", "compliance data"),
+                    ("purity_test_details", "purity test data")
+                ]
+                
+                for table_name, description in tables_to_clean:
+                    try:
+                        cursor.execute(f"DELETE FROM {table_name} WHERE branch_id IN ({branch_ids_str})")
+                        affected_rows = cursor.rowcount
+                        logger.info(f"Deleted {affected_rows} {description} records for branches: {branch_ids_str}")
+                    except Exception as e:
+                        # Log but continue - table might not exist or be empty
+                        logger.warning(f"Could not delete from {table_name}: {e}")
+                
+                # Delete tenant users (includes branch admins with user_role='branch_admin')
+                try:
+                    cursor.execute(f"DELETE FROM tenant_users WHERE branch_id IN ({branch_ids_str})")
+                    affected_rows = cursor.rowcount
+                    logger.info(f"Deleted {affected_rows} tenant users for branches: {branch_ids_str}")
+                except Exception as e:
+                    logger.warning(f"Could not delete tenant users: {e}")
+            
+            # Delete branches (this will cascade to other related data)
+            cursor.execute("DELETE FROM branches WHERE bank_id = %s", (bank_id,))
+            affected_rows = cursor.rowcount
+            logger.info(f"Deleted {affected_rows} branches for bank: {bank_id}")
+            
+            # Delete bank admins
+            try:
+                cursor.execute("DELETE FROM bank_admins WHERE bank_id = %s", (bank_id,))
+                affected_rows = cursor.rowcount
+                logger.info(f"Deleted {affected_rows} bank admins for bank: {bank_id}")
+            except Exception as e:
+                logger.warning(f"Could not delete bank admins: {e}")
+        
+        # Finally, delete the bank
         cursor.execute("DELETE FROM banks WHERE id = %s", (bank_id,))
         db.commit()
         cursor.close()
         
-        logger.info(f"Deleted bank {bank_id}")
-        return {"message": "Bank deleted successfully"}
+        if force and branch_count > 0:
+            logger.info(f"Force deleted bank {bank_id} ({bank_name}) with {branch_count} branches and all associated data")
+            return {"message": f"Bank '{bank_name}' and all {branch_count} branches deleted successfully (cascade)"}
+        else:
+            logger.info(f"Deleted bank {bank_id} ({bank_name})")
+            return {"message": f"Bank '{bank_name}' deleted successfully"}
         
     except HTTPException:
         raise

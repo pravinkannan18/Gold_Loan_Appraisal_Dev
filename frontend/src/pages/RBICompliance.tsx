@@ -395,7 +395,7 @@ export function RBICompliance() {
 
       if (!sessionId) {
         showToast('Session not found. Please start from appraiser details.', 'error');
-        navigate('/appraiser-details');
+        navigate('/customer-image');
         return;
       }
 

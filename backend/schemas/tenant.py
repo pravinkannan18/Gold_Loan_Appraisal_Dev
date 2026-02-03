@@ -44,8 +44,9 @@ class BankBase(BaseModel):
     
     @validator('bank_code')
     def validate_bank_code(cls, v):
-        if not v.isalnum():
-            raise ValueError('Bank code must be alphanumeric')
+        # Allow alphanumeric and underscores
+        if not all(c.isalnum() or c == '_' for c in v):
+            raise ValueError('Bank code must be alphanumeric (underscores allowed)')
         return v.upper()
 
 class BankCreate(BankBase):

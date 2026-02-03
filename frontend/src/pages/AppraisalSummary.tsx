@@ -113,7 +113,7 @@ export function AppraisalSummary() {
         if (!sessionId) {
           console.error('No session ID found');
           showToast('Session not found. Please start from the beginning.', 'error');
-          navigate('/appraiser-details');
+          navigate('/customer-image');
           return;
         }
 
@@ -467,7 +467,7 @@ export function AppraisalSummary() {
               <p className="text-muted-foreground mt-2">{loadError}</p>
             </div>
             <Button
-              onClick={() => navigate('/appraiser-details')}
+              onClick={() => navigate('/customer-image')}
               variant="destructive"
             >
               Start New Appraisal

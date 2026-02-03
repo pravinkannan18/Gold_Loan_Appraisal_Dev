@@ -138,7 +138,7 @@ const Dashboard = () => {
       title: "New Appraiser Registration",
       description: "Please provide your details to complete registration.",
     });
-    navigate("/appraiser-details");
+    navigate("/customer-image");
   };
 
   const handleFacialRecognitionCancel = () => {

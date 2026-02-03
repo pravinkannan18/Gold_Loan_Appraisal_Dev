@@ -64,7 +64,7 @@ const CameraTest = () => {
 
   const handleBack = () => {
     if (stage === "customer") {
-      navigate("/appraiser-details");
+      navigate("/customer-image");
     } else if (stage === "customer2") {
       navigate("/camera-test?stage=customer");
     } else {

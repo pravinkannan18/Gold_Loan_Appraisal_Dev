@@ -48,6 +48,35 @@ async def recognize_face(image: str = Form(...)):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/identify")
+async def identify_appraiser(
+    image: str = Form(...),
+    appraiser_id: str = Form(None),
+    name: str = Form(None), 
+    bank_id: str = Form(None),
+    branch_id: str = Form(None)
+):
+    """Identify a specific appraiser by comparing with their registered face in specific bank/branch"""
+    try:
+        if facial_service is None:
+            raise HTTPException(status_code=500, detail="Facial service not initialized")
+        
+        # Use the specific identify method for bank/branch context
+        result = facial_service.identify_appraiser(
+            image=image,
+            expected_appraiser_id=appraiser_id,
+            expected_name=name,
+            bank_id=bank_id,
+            branch_id=branch_id
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in identify_appraiser endpoint: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/appraisers")
 async def get_registered_appraisers():
     """Get list of registered appraisers"""

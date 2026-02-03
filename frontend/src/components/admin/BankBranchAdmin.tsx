@@ -180,9 +180,20 @@ export const BankBranchAdmin: React.FC<BankBranchAdminProps> = ({
   const [deletingBranchAdminId, setDeletingBranchAdminId] = useState<number | null>(null);
   const [showBranchAdminPassword, setShowBranchAdminPassword] = useState(false);
 
+  // Registered Appraisers List state (RBAC)
+  const [registeredAppraisers, setRegisteredAppraisers] = useState<any[]>([]);
+  const [loadingAppraisers, setLoadingAppraisers] = useState(false);
+  const [appraisersSearchTerm, setAppraisersSearchTerm] = useState('');
+
+  // Registration form bank/branch selection (for Super Admin and Bank Admin)
+  const [regSelectedBankId, setRegSelectedBankId] = useState<number | null>(adminBankId || null);
+  const [regSelectedBranchId, setRegSelectedBranchId] = useState<number | null>(adminBranchId || null);
+  const [regFilteredBranches, setRegFilteredBranches] = useState<Branch[]>([]);
+
   // Check if user is a bank admin (restricted access)
   const isBankAdmin = adminRole === 'bank_admin';
   const isBranchAdmin = adminRole === 'branch_admin';
+  const isSuperAdmin = adminRole === 'super_admin';
 
   // Fetch banks and branches on component mount
   useEffect(() => {
@@ -223,6 +234,26 @@ export const BankBranchAdmin: React.FC<BankBranchAdminProps> = ({
     
     setFilteredBranches(filtered);
   }, [branches, selectedBankId, searchTerm, isBankAdmin, isBranchAdmin, adminBankId, adminBranchId]);
+
+  // Filter branches for registration form based on selected bank
+  useEffect(() => {
+    // For Bank Admin, initialize regSelectedBankId with their bank
+    if (isBankAdmin && adminBankId && !regSelectedBankId) {
+      setRegSelectedBankId(adminBankId);
+    }
+    
+    if (regSelectedBankId) {
+      const filtered = branches.filter(branch => branch.bank_id === regSelectedBankId);
+      setRegFilteredBranches(filtered);
+      // Reset branch selection if current selection is not in filtered list
+      if (regSelectedBranchId && !filtered.find(b => b.id === regSelectedBranchId)) {
+        setRegSelectedBranchId(null);
+      }
+    } else {
+      setRegFilteredBranches([]);
+      setRegSelectedBranchId(null);
+    }
+  }, [regSelectedBankId, branches, isBankAdmin, adminBankId]);
 
   // Cleanup camera on unmount
   useEffect(() => {
@@ -268,6 +299,9 @@ export const BankBranchAdmin: React.FC<BankBranchAdminProps> = ({
       }
       
       setBranches(Array.isArray(branchesData) ? branchesData : []);
+      
+      // Also fetch appraisers with RBAC
+      await fetchAppraisers();
     } catch (error) {
       console.error('Error fetching data:', error);
       setError(error instanceof Error ? error.message : 'Failed to load data');
@@ -275,6 +309,45 @@ export const BankBranchAdmin: React.FC<BankBranchAdminProps> = ({
       setLoading(false);
     }
   };
+
+  // Fetch appraisers with RBAC filtering
+  const fetchAppraisers = async () => {
+    setLoadingAppraisers(true);
+    try {
+      // Build query parameters based on role
+      const params = new URLSearchParams();
+      params.append('role', adminRole || 'branch_admin');
+      
+      if (adminRole === 'bank_admin' && adminBankId) {
+        params.append('bank_id', adminBankId.toString());
+      } else if (adminRole === 'branch_admin' && adminBranchId) {
+        params.append('branch_id', adminBranchId.toString());
+      }
+      // Super admin doesn't need additional params - sees all
+      
+      const response = await fetch(`${API_BASE_URL}/api/admin/appraisers/all?${params.toString()}`);
+      
+      if (response.ok) {
+        const data = await response.json();
+        setRegisteredAppraisers(data.appraisers || []);
+      } else {
+        console.error('Failed to fetch appraisers');
+      }
+    } catch (error) {
+      console.error('Error fetching appraisers:', error);
+    } finally {
+      setLoadingAppraisers(false);
+    }
+  };
+
+  // Filter appraisers based on search
+  const filteredAppraisers = registeredAppraisers.filter(appraiser =>
+    appraiser.name?.toLowerCase().includes(appraisersSearchTerm.toLowerCase()) ||
+    appraiser.appraiser_id?.toLowerCase().includes(appraisersSearchTerm.toLowerCase()) ||
+    appraiser.email?.toLowerCase().includes(appraisersSearchTerm.toLowerCase()) ||
+    appraiser.bank_name?.toLowerCase().includes(appraisersSearchTerm.toLowerCase()) ||
+    appraiser.branch_name?.toLowerCase().includes(appraisersSearchTerm.toLowerCase())
+  );
 
   const handleBankSelect = (bankId: number | null) => {
     if (!isBankAdmin && !isBranchAdmin) {
@@ -419,6 +492,15 @@ export const BankBranchAdmin: React.FC<BankBranchAdminProps> = ({
 
   const startCamera = useCallback(async () => {
     try {
+      console.log('Starting camera...');
+      console.log('videoRef.current:', videoRef.current);
+      
+      // Check if browser supports getUserMedia
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert('Camera is not supported in this browser');
+        return;
+      }
+      
       const stream = await navigator.mediaDevices.getUserMedia({ 
         video: { 
           width: { ideal: 640 },
@@ -427,14 +509,55 @@ export const BankBranchAdmin: React.FC<BankBranchAdminProps> = ({
         } 
       });
       
+      console.log('Camera stream obtained:', stream);
+      console.log('videoRef.current after stream:', videoRef.current);
+      
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         streamRef.current = stream;
+        
+        // Wait for the video to load and start playing
+        videoRef.current.onloadedmetadata = () => {
+          console.log('Video metadata loaded');
+          if (videoRef.current) {
+            videoRef.current.play().then(() => {
+              console.log('Video playing successfully');
+              setIsCameraActive(true);
+            }).catch((playError) => {
+              console.error('Error playing video:', playError);
+              setIsCameraActive(true); // Set active anyway, video might work
+            });
+          }
+        };
+        
+        // Set camera active immediately for better UX
         setIsCameraActive(true);
+        
+        // Ensure video starts playing
+        setTimeout(() => {
+          if (videoRef.current) {
+            videoRef.current.play().catch(e => console.log('Auto-play attempt failed:', e));
+          }
+        }, 100);
+      } else {
+        console.error('videoRef.current is null - video element not found in DOM');
+        alert('Camera element not found. Please refresh the page and try again.');
       }
     } catch (err) {
       console.error('Error accessing camera:', err);
-      alert('Unable to access camera. Please ensure camera permissions are granted.');
+      let errorMessage = 'Unable to access camera. ';
+      
+      if (err.name === 'NotAllowedError') {
+        errorMessage += 'Please allow camera permissions and try again.';
+      } else if (err.name === 'NotFoundError') {
+        errorMessage += 'No camera device found.';
+      } else if (err.name === 'NotReadableError') {
+        errorMessage += 'Camera is already in use by another application.';
+      } else {
+        errorMessage += 'Please check your camera settings and permissions.';
+      }
+      
+      alert(errorMessage);
     }
   }, []);
 
@@ -502,6 +625,35 @@ export const BankBranchAdmin: React.FC<BankBranchAdminProps> = ({
     setRegistrationMessage('');
 
     try {
+      // Determine bank_id and branch_id based on admin role
+      let effectiveBankId = adminBankId;
+      let effectiveBranchId = adminBranchId;
+      let effectiveBankName = adminBankName;
+      let effectiveBranchName = adminBranchName;
+      
+      if (isSuperAdmin) {
+        // Super Admin must select bank and branch
+        if (!regSelectedBankId || !regSelectedBranchId) {
+          alert('Please select bank and branch');
+          setSaving(false);
+          return;
+        }
+        effectiveBankId = regSelectedBankId;
+        effectiveBranchId = regSelectedBranchId;
+        effectiveBankName = banks.find(b => b.id === regSelectedBankId)?.bank_name || '';
+        effectiveBranchName = regFilteredBranches.find(b => b.id === regSelectedBranchId)?.branch_name || '';
+      } else if (isBankAdmin) {
+        // Bank Admin must select branch (bank is fixed)
+        if (!regSelectedBranchId) {
+          alert('Please select a branch');
+          setSaving(false);
+          return;
+        }
+        effectiveBranchId = regSelectedBranchId;
+        effectiveBranchName = regFilteredBranches.find(b => b.id === regSelectedBranchId)?.branch_name || '';
+      }
+      // For Branch Admin, use the fixed adminBankId and adminBranchId
+      
       const appraiserId = generateAppraiserId();
       const timestamp = new Date().toISOString();
 
@@ -510,10 +662,18 @@ export const BankBranchAdmin: React.FC<BankBranchAdminProps> = ({
         id: appraiserId,
         image: capturedPhoto,
         timestamp: timestamp,
-        bank: adminBankName || '',
-        branch: adminBranchName || '',
+        // Use determined IDs
+        bank_id: effectiveBankId,
+        branch_id: effectiveBranchId,
+        // Keep legacy fields for backward compatibility
+        bank: effectiveBankName || '',
+        branch: effectiveBranchName || '',
         email: appraiserForm.email.trim(),
-        phone: appraiserForm.phone.trim()
+        phone: appraiserForm.phone.trim(),
+        // RBAC fields for server-side validation
+        registrar_role: adminRole,
+        registrar_bank_id: adminBankId,
+        registrar_branch_id: adminBranchId
       };
 
       const response = await fetch(`${API_BASE_URL}/api/appraiser`, {
@@ -532,12 +692,20 @@ export const BankBranchAdmin: React.FC<BankBranchAdminProps> = ({
       setRegistrationSuccess(true);
       setRegistrationMessage(`Appraiser registered successfully! ID: ${appraiserId}`);
       
+      // Refresh appraisers list after successful registration
+      fetchAppraisers();
+      
       // Reset form after successful registration
       setTimeout(() => {
         setAppraiserForm(initialAppraiserForm);
         setCapturedPhoto(null);
         setRegistrationSuccess(false);
         setRegistrationMessage('');
+        // Reset bank/branch selection for Super Admin
+        if (isSuperAdmin) {
+          setRegSelectedBankId(null);
+          setRegSelectedBranchId(null);
+        }
       }, 3000);
 
     } catch (error) {
@@ -738,8 +906,12 @@ export const BankBranchAdmin: React.FC<BankBranchAdminProps> = ({
       )}
 
       {/* Main Content */}
-      <Tabs defaultValue={isBranchAdmin ? "appraisers" : "branches"} className="space-y-4">
+      <Tabs defaultValue={isBranchAdmin ? "appraisers" : "registered-appraisers"} className="space-y-4">
         <TabsList>
+          <TabsTrigger value="registered-appraisers" className="gap-2">
+            <Users className="h-4 w-4" />
+            Registered Appraisers
+          </TabsTrigger>
           <TabsTrigger value="branches" className="gap-2">
             <GitBranch className="h-4 w-4" />
             {isBranchAdmin ? 'Branch Info' : 'Branches'}
@@ -750,180 +922,367 @@ export const BankBranchAdmin: React.FC<BankBranchAdminProps> = ({
               Branch Admins
             </TabsTrigger>
           )}
-          {isBranchAdmin && (
+          {(isBranchAdmin || isBankAdmin || isSuperAdmin) && (
             <TabsTrigger value="appraisers" className="gap-2">
-              <User className="h-4 w-4" />
-              Appraiser Registration
+              <UserPlus className="h-4 w-4" />
+              {isBranchAdmin ? 'Register Appraiser' : 'Add Appraiser'}
             </TabsTrigger>
           )}
         </TabsList>
 
-        {/* Branches Tab */}
-        {/* Appraiser Registration Tab (Branch Admin Only) */}
-        {isBranchAdmin && (
-          <TabsContent value="appraisers" className="space-y-4">
-            <Card>
-              <CardHeader>
+        {/* Registered Appraisers Tab - Visible to all admin roles with RBAC filtering */}
+        <TabsContent value="registered-appraisers" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                 <CardTitle className="flex items-center gap-2">
-                  <UserPlus className="h-5 w-5" />
-                  Register New Appraiser
+                  <Users className="h-5 w-5" />
+                  Registered Appraisers
+                  {isSuperAdmin && <Badge variant="outline">All Banks & Branches</Badge>}
+                  {isBankAdmin && <Badge variant="outline">{adminBankName} - All Branches</Badge>}
+                  {isBranchAdmin && <Badge variant="outline">{adminBranchName}</Badge>}
                 </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                  {/* Form Section */}
-                  <div className="space-y-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="full_name">Full Name *</Label>
-                      <Input
-                        id="full_name"
-                        value={appraiserForm.full_name}
-                        onChange={(e) => handleAppraiserFormChange('full_name', e.target.value)}
-                        placeholder="Enter appraiser's full name"
-                      />
-                    </div>
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <div className="relative flex-1 sm:w-64">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+                    <Input
+                      placeholder="Search appraisers..."
+                      value={appraisersSearchTerm}
+                      onChange={(e) => setAppraisersSearchTerm(e.target.value)}
+                      className="pl-10"
+                    />
+                  </div>
+                  <Button 
+                    variant="outline" 
+                    size="icon"
+                    onClick={fetchAppraisers}
+                    disabled={loadingAppraisers}
+                  >
+                    <RefreshCw className={`h-4 w-4 ${loadingAppraisers ? 'animate-spin' : ''}`} />
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {loadingAppraisers ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+                  <span className="ml-2 text-gray-600">Loading appraisers...</span>
+                </div>
+              ) : filteredAppraisers.length === 0 ? (
+                <div className="text-center py-8">
+                  <User className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                  <h3 className="text-lg font-medium text-gray-600">No Appraisers Found</h3>
+                  <p className="text-gray-500 mt-2">
+                    {appraisersSearchTerm 
+                      ? 'Try adjusting your search' 
+                      : 'No appraisers registered yet'}
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full border-collapse">
+                    <thead>
+                      <tr className="border-b bg-gray-50">
+                        <th className="text-left p-3 font-semibold text-gray-700">Appraiser</th>
+                        <th className="text-left p-3 font-semibold text-gray-700">ID</th>
+                        {(isSuperAdmin || isBankAdmin) && (
+                          <th className="text-left p-3 font-semibold text-gray-700">Bank</th>
+                        )}
+                        {(isSuperAdmin || isBankAdmin) && (
+                          <th className="text-left p-3 font-semibold text-gray-700">Branch</th>
+                        )}
+                        <th className="text-left p-3 font-semibold text-gray-700">Contact</th>
+                        <th className="text-left p-3 font-semibold text-gray-700">Status</th>
+                        <th className="text-left p-3 font-semibold text-gray-700">Appraisals</th>
+                        <th className="text-left p-3 font-semibold text-gray-700">Registered</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredAppraisers.map((appraiser) => (
+                        <tr key={appraiser.id} className="border-b hover:bg-gray-50">
+                          <td className="p-3">
+                            <div className="flex items-center gap-3">
+                              {appraiser.image_data ? (
+                                <img 
+                                  src={appraiser.image_data} 
+                                  alt={appraiser.name}
+                                  className="w-10 h-10 rounded-full object-cover border"
+                                />
+                              ) : (
+                                <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center">
+                                  <User className="h-5 w-5 text-gray-500" />
+                                </div>
+                              )}
+                              <span className="font-medium">{appraiser.name}</span>
+                            </div>
+                          </td>
+                          <td className="p-3">
+                            <code className="text-sm bg-gray-100 px-2 py-1 rounded">
+                              {appraiser.appraiser_id}
+                            </code>
+                          </td>
+                          {(isSuperAdmin || isBankAdmin) && (
+                            <td className="p-3 text-sm">
+                              {appraiser.bank_name || '-'}
+                            </td>
+                          )}
+                          {(isSuperAdmin || isBankAdmin) && (
+                            <td className="p-3 text-sm">
+                              {appraiser.branch_name || '-'}
+                            </td>
+                          )}
+                          <td className="p-3">
+                            <div className="text-sm">
+                              {appraiser.email && (
+                                <div className="flex items-center gap-1 text-gray-600">
+                                  <Mail className="h-3 w-3" />
+                                  {appraiser.email}
+                                </div>
+                              )}
+                              {appraiser.phone && (
+                                <div className="flex items-center gap-1 text-gray-600">
+                                  <Phone className="h-3 w-3" />
+                                  {appraiser.phone}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                          <td className="p-3">
+                            <Badge className={appraiser.has_face_encoding 
+                              ? 'bg-green-100 text-green-800' 
+                              : 'bg-yellow-100 text-yellow-800'
+                            }>
+                              {appraiser.has_face_encoding ? 'Face Registered' : 'No Face'}
+                            </Badge>
+                          </td>
+                          <td className="p-3 text-center">
+                            <Badge variant="outline">
+                              {appraiser.appraisals_completed || 0}
+                            </Badge>
+                          </td>
+                          <td className="p-3 text-sm text-gray-600">
+                            {formatDate(appraiser.created_at)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div className="mt-4 text-sm text-gray-500 text-center">
+                    Showing {filteredAppraisers.length} of {registeredAppraisers.length} appraisers
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-                    <div className="space-y-2">
-                      <Label htmlFor="bank_name_display">Bank Name</Label>
+        {/* Branches Tab */}
+        {/* Appraiser Registration Tab - Available to all admin roles */}
+        <TabsContent value="appraisers" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <UserPlus className="h-5 w-5" />
+                Register New Appraiser
+                {isSuperAdmin && <Badge variant="outline" className="ml-2">Super Admin - Select Bank & Branch</Badge>}
+                {isBankAdmin && <Badge variant="outline" className="ml-2">Bank Admin - Select Branch</Badge>}
+                {isBranchAdmin && <Badge variant="outline" className="ml-2">{adminBranchName}</Badge>}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                {/* Form Section */}
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="full_name">Full Name *</Label>
+                    <Input
+                      id="full_name"
+                      value={appraiserForm.full_name}
+                      onChange={(e) => handleAppraiserFormChange('full_name', e.target.value)}
+                      placeholder="Enter appraiser's full name"
+                    />
+                  </div>
+
+                  {/* Bank Selection - Super Admin can select, others see fixed value */}
+                  <div className="space-y-2">
+                    <Label htmlFor="reg_bank">Bank *</Label>
+                    {isSuperAdmin ? (
+                      <select
+                        id="reg_bank"
+                        value={regSelectedBankId || ''}
+                        onChange={(e) => setRegSelectedBankId(e.target.value ? Number(e.target.value) : null)}
+                        className="w-full p-2 border rounded-md bg-white"
+                      >
+                        <option value="">Select Bank</option>
+                        {banks.map(bank => (
+                          <option key={bank.id} value={bank.id}>{bank.bank_name}</option>
+                        ))}
+                      </select>
+                    ) : (
                       <Input
-                        id="bank_name_display"
+                        id="reg_bank"
                         value={adminBankName || ''}
                         disabled
                         className="bg-gray-100"
                       />
-                    </div>
+                    )}
+                  </div>
 
-                    <div className="space-y-2">
-                      <Label htmlFor="branch_name_display">Branch Name</Label>
+                  {/* Branch Selection - Super Admin and Bank Admin can select */}
+                  <div className="space-y-2">
+                    <Label htmlFor="reg_branch">Branch *</Label>
+                    {(isSuperAdmin || isBankAdmin) ? (
+                      <select
+                        id="reg_branch"
+                        value={regSelectedBranchId || ''}
+                        onChange={(e) => setRegSelectedBranchId(e.target.value ? Number(e.target.value) : null)}
+                        className="w-full p-2 border rounded-md bg-white"
+                        disabled={isSuperAdmin && !regSelectedBankId}
+                      >
+                        <option value="">Select Branch</option>
+                        {regFilteredBranches.map(branch => (
+                          <option key={branch.id} value={branch.id}>{branch.branch_name}</option>
+                        ))}
+                      </select>
+                    ) : (
                       <Input
-                        id="branch_name_display"
+                        id="reg_branch"
                         value={adminBranchName || ''}
                         disabled
                         className="bg-gray-100"
                       />
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="email">Email ID *</Label>
-                      <Input
-                        id="email"
-                        type="email"
-                        value={appraiserForm.email}
-                        onChange={(e) => handleAppraiserFormChange('email', e.target.value)}
-                        placeholder="appraiser@example.com"
-                      />
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="phone">Phone Number *</Label>
-                      <Input
-                        id="phone"
-                        type="tel"
-                        value={appraiserForm.phone}
-                        onChange={(e) => handleAppraiserFormChange('phone', e.target.value)}
-                        placeholder="Enter phone number"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Camera Section */}
-                  <div className="space-y-4">
-                    <Label>Face Photo *</Label>
-                    <div className="border-2 border-dashed border-gray-300 rounded-lg p-4">
-                      {!capturedPhoto ? (
-                        <div className="space-y-4">
-                          {isCameraActive ? (
-                            <>
-                              <video
-                                ref={videoRef}
-                                autoPlay
-                                playsInline
-                                muted
-                                className="w-full rounded-lg bg-black"
-                              />
-                              <Button 
-                                onClick={capturePhoto} 
-                                className="w-full gap-2 bg-green-600 hover:bg-green-700"
-                              >
-                                <Camera className="h-4 w-4" />
-                                Capture Photo
-                              </Button>
-                            </>
-                          ) : (
-                            <div className="flex flex-col items-center justify-center py-8">
-                              <Camera className="h-16 w-16 text-gray-400 mb-4" />
-                              <p className="text-gray-600 mb-4">Click to start camera</p>
-                              <Button onClick={startCamera} className="gap-2">
-                                <Camera className="h-4 w-4" />
-                                Start Camera
-                              </Button>
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="space-y-4">
-                          <img
-                            src={capturedPhoto}
-                            alt="Captured face"
-                            className="w-full rounded-lg"
-                          />
-                          <Button 
-                            onClick={retakePhoto} 
-                            variant="outline" 
-                            className="w-full gap-2"
-                          >
-                            <RefreshCw className="h-4 w-4" />
-                            Retake Photo
-                          </Button>
-                        </div>
-                      )}
-                      <canvas ref={canvasRef} className="hidden" />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Success/Error Message */}
-                {registrationMessage && (
-                  <div className={`mt-4 p-4 rounded-lg ${
-                    registrationSuccess 
-                      ? 'bg-green-100 text-green-800 border border-green-300' 
-                      : 'bg-red-100 text-red-800 border border-red-300'
-                  }`}>
-                    <div className="flex items-center gap-2">
-                      {registrationSuccess ? (
-                        <CheckCircle className="h-5 w-5" />
-                      ) : (
-                        <AlertCircle className="h-5 w-5" />
-                      )}
-                      {registrationMessage}
-                    </div>
-                  </div>
-                )}
-
-                {/* Register Button */}
-                <div className="mt-6 flex justify-end">
-                  <Button 
-                    onClick={registerAppraiser} 
-                    disabled={saving}
-                    className="gap-2 bg-blue-600 hover:bg-blue-700 text-white"
-                  >
-                    {saving ? (
-                      <>
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Registering...
-                      </>
-                    ) : (
-                      <>
-                        <UserPlus className="h-4 w-4" />
-                        Register Appraiser
-                      </>
                     )}
-                  </Button>
+                    {isSuperAdmin && !regSelectedBankId && (
+                      <p className="text-sm text-gray-500">Please select a bank first</p>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="email">Email ID *</Label>
+                    <Input
+                      id="email"
+                      type="email"
+                      value={appraiserForm.email}
+                      onChange={(e) => handleAppraiserFormChange('email', e.target.value)}
+                      placeholder="appraiser@example.com"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="phone">Phone Number *</Label>
+                    <Input
+                      id="phone"
+                      type="tel"
+                      value={appraiserForm.phone}
+                      onChange={(e) => handleAppraiserFormChange('phone', e.target.value)}
+                      placeholder="Enter phone number"
+                    />
+                  </div>
                 </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-        )}
+
+                {/* Camera Section */}
+                <div className="space-y-4">
+                  <Label>Face Photo *</Label>
+                  <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 min-h-[300px]">
+                    {!capturedPhoto ? (
+                      <div className="space-y-4">
+                        {/* Video element - always in DOM */}
+                        <video
+                          ref={videoRef}
+                          autoPlay
+                          playsInline
+                          muted
+                          className={`w-full h-64 rounded-lg bg-black object-cover ${isCameraActive ? 'block' : 'hidden'}`}
+                          style={{ transform: 'scaleX(-1)' }}
+                        />
+                        
+                        {/* Capture button - shown when camera is active */}
+                        {isCameraActive && (
+                          <Button 
+                            onClick={capturePhoto} 
+                            className="w-full gap-2 bg-green-600 hover:bg-green-700"
+                          >
+                            <Camera className="h-4 w-4" />
+                            Capture Photo
+                          </Button>
+                        )}
+                        
+                        {/* Start camera button - shown when camera not active */}
+                        {!isCameraActive && (
+                          <div className="flex flex-col items-center justify-center py-8">
+                            <Camera className="h-16 w-16 text-gray-400 mb-4" />
+                            <p className="text-gray-600 mb-4">Click to start camera</p>
+                            <Button onClick={startCamera} className="gap-2">
+                              <Camera className="h-4 w-4" />
+                              Start Camera
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        <img
+                          src={capturedPhoto}
+                          alt="Captured face"
+                          className="w-full rounded-lg"
+                        />
+                        <Button 
+                          onClick={retakePhoto} 
+                          variant="outline" 
+                          className="w-full gap-2"
+                        >
+                          <RefreshCw className="h-4 w-4" />
+                          Retake Photo
+                        </Button>
+                      </div>
+                    )}
+                    <canvas ref={canvasRef} className="hidden" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Success/Error Message */}
+              {registrationMessage && (
+                <div className={`mt-4 p-4 rounded-lg ${
+                  registrationSuccess 
+                    ? 'bg-green-100 text-green-800 border border-green-300' 
+                    : 'bg-red-100 text-red-800 border border-red-300'
+                }`}>
+                  <div className="flex items-center gap-2">
+                    {registrationSuccess ? (
+                      <CheckCircle className="h-5 w-5" />
+                    ) : (
+                      <AlertCircle className="h-5 w-5" />
+                    )}
+                    {registrationMessage}
+                  </div>
+                </div>
+              )}
+
+              {/* Register Button */}
+              <div className="mt-6 flex justify-end">
+                <Button 
+                  onClick={registerAppraiser} 
+                  disabled={saving}
+                  className="gap-2 bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  {saving ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Registering...
+                    </>
+                  ) : (
+                    <>
+                      <UserPlus className="h-4 w-4" />
+                      Register Appraiser
+                    </>
+                  )}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
         {/* Branches Tab */}
         <TabsContent value="branches" className="space-y-4">
@@ -1336,27 +1695,32 @@ export const BankBranchAdmin: React.FC<BankBranchAdminProps> = ({
                 {/* Camera Section */}
                 <div className="space-y-4">
                   <Label>Face Photo *</Label>
-                  <div className="border-2 border-dashed border-gray-300 rounded-lg p-4">
+                  <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 min-h-[300px]">
                     {!capturedPhoto ? (
                       <div className="space-y-4">
-                        {isCameraActive ? (
-                          <>
-                            <video
-                              ref={videoRef}
-                              autoPlay
-                              playsInline
-                              muted
-                              className="w-full rounded-lg bg-black"
-                            />
-                            <Button 
-                              onClick={capturePhoto} 
-                              className="w-full gap-2 bg-green-600 hover:bg-green-700"
-                            >
-                              <Camera className="h-4 w-4" />
-                              Capture Photo
-                            </Button>
-                          </>
-                        ) : (
+                        {/* Video element - always in DOM */}
+                        <video
+                          ref={videoRef}
+                          autoPlay
+                          playsInline
+                          muted
+                          className={`w-full h-64 rounded-lg bg-black object-cover ${isCameraActive ? 'block' : 'hidden'}`}
+                          style={{ transform: 'scaleX(-1)' }}
+                        />
+                        
+                        {/* Capture button - shown when camera is active */}
+                        {isCameraActive && (
+                          <Button 
+                            onClick={capturePhoto} 
+                            className="w-full gap-2 bg-green-600 hover:bg-green-700"
+                          >
+                            <Camera className="h-4 w-4" />
+                            Capture Photo
+                          </Button>
+                        )}
+                        
+                        {/* Start camera button - shown when camera not active */}
+                        {!isCameraActive && (
                           <div className="flex flex-col items-center justify-center py-8">
                             <Camera className="h-16 w-16 text-gray-400 mb-4" />
                             <p className="text-gray-600 mb-4">Click to start camera</p>

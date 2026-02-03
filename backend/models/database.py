@@ -175,6 +175,26 @@ class Database:
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_tenant_users_bank_user ON tenant_users(bank_id, user_id)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_tenant_users_branch ON tenant_users(branch_id)')
             
+            # Appraiser Bank Branch Mapping Table - For multi-bank/branch support
+            # An appraiser can be mapped to multiple bank/branch combinations
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS appraiser_bank_branch_map (
+                    id SERIAL PRIMARY KEY,
+                    appraiser_id TEXT NOT NULL,  -- References overall_sessions.appraiser_id where status='registered'
+                    bank_id INTEGER NOT NULL REFERENCES banks(id) ON DELETE CASCADE,
+                    branch_id INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+                    is_active BOOLEAN DEFAULT true,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    
+                    UNIQUE(appraiser_id, bank_id, branch_id)
+                )
+            ''')
+            
+            # Create indexes for appraiser mapping
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_appraiser_map_appraiser ON appraiser_bank_branch_map(appraiser_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_appraiser_map_bank_branch ON appraiser_bank_branch_map(bank_id, branch_id)')
+            
             # 1. Overall Sessions (Master Table) - Updated with tenant hierarchy
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS overall_sessions (
@@ -1282,6 +1302,16 @@ class Database:
                       bank, branch, email, phone, bank_id, branch_id, tenant_user_id))
             
             result = cursor.fetchone()
+            
+            # Create appraiser bank/branch mapping entry
+            if bank_id and branch_id:
+                cursor.execute('''
+                    INSERT INTO appraiser_bank_branch_map (appraiser_id, bank_id, branch_id)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (appraiser_id, bank_id, branch_id) DO UPDATE
+                    SET is_active = true, updated_at = CURRENT_TIMESTAMP
+                ''', (appraiser_id, bank_id, branch_id))
+            
             conn.commit()
             return result['id']
         except Exception as e:
@@ -1318,6 +1348,57 @@ class Database:
         finally:
             cursor.close()
             conn.close()
+
+    def get_appraisers_by_filters(self, filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Fetch registered appraisers with face encoding based on specific filters (bank, branch, name, etc.)"""
+        conn = self.get_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            # Build WHERE clause based on filters
+            # Query overall_sessions with status='registered' (where appraiser registration data is stored)
+            where_conditions = ["os.face_encoding IS NOT NULL", "os.status = 'registered'"]
+            params = []
+            
+            if 'appraiser_id' in filters:
+                where_conditions.append("os.appraiser_id = %s")
+                params.append(filters['appraiser_id'])
+            
+            if 'name' in filters:
+                where_conditions.append("LOWER(os.name) = LOWER(%s)")
+                params.append(filters['name'])
+                
+            if 'bank_id' in filters:
+                where_conditions.append("os.bank_id = %s")
+                params.append(filters['bank_id'])
+                
+            if 'branch_id' in filters:
+                where_conditions.append("os.branch_id = %s")
+                params.append(filters['branch_id'])
+            
+            where_clause = " AND ".join(where_conditions)
+            
+            query = f'''
+                SELECT os.id, os.name, os.appraiser_id, os.image_data, os.face_encoding, 
+                       os.created_at, os.bank, os.branch, os.email, os.phone,
+                       os.bank_id, os.branch_id, os.tenant_user_id,
+                       b.bank_name, b.bank_code,
+                       br.branch_name, br.branch_code,
+                       tu.full_name as tenant_user_name, tu.user_id as tenant_user_id_text,
+                       tu.employee_id, tu.designation, tu.user_role
+                FROM overall_sessions os
+                LEFT JOIN banks b ON os.bank_id = b.id
+                LEFT JOIN branches br ON os.branch_id = br.id
+                LEFT JOIN tenant_users tu ON os.tenant_user_id = tu.id
+                WHERE {where_clause}
+                ORDER BY os.created_at DESC
+            '''
+            
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            cursor.close()
+            conn.close()
             
     def get_appraiser_by_id(self, appraiser_id: str) -> Optional[Dict[str, Any]]:
         conn = self.get_connection()
@@ -1327,6 +1408,168 @@ class Database:
             cursor.execute("SELECT * FROM overall_sessions WHERE session_id = %s", (pseudo_session_id,))
             row = cursor.fetchone()
             return dict(row) if row else None
+        finally:
+            cursor.close()
+            conn.close()
+    
+    # =========================================================================
+    # Appraiser Bank/Branch Mapping Methods
+    # =========================================================================
+    
+    def add_appraiser_to_bank_branch(self, appraiser_id: str, bank_id: int, branch_id: int) -> bool:
+        """Add an appraiser mapping to a bank/branch"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute('''
+                INSERT INTO appraiser_bank_branch_map (appraiser_id, bank_id, branch_id)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (appraiser_id, bank_id, branch_id) DO UPDATE
+                SET is_active = true, updated_at = CURRENT_TIMESTAMP
+            ''', (appraiser_id, bank_id, branch_id))
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            cursor.close()
+            conn.close()
+    
+    def remove_appraiser_from_bank_branch(self, appraiser_id: str, bank_id: int, branch_id: int) -> bool:
+        """Remove an appraiser mapping from a bank/branch (soft delete)"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute('''
+                UPDATE appraiser_bank_branch_map 
+                SET is_active = false, updated_at = CURRENT_TIMESTAMP
+                WHERE appraiser_id = %s AND bank_id = %s AND branch_id = %s
+            ''', (appraiser_id, bank_id, branch_id))
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            cursor.close()
+            conn.close()
+    
+    def get_appraiser_bank_branch_mappings(self, appraiser_id: str) -> List[Dict[str, Any]]:
+        """Get all bank/branch mappings for an appraiser"""
+        conn = self.get_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cursor.execute('''
+                SELECT m.id, m.appraiser_id, m.bank_id, m.branch_id, m.is_active, m.created_at,
+                       b.bank_name, b.bank_code, br.branch_name, br.branch_code
+                FROM appraiser_bank_branch_map m
+                JOIN banks b ON m.bank_id = b.id
+                JOIN branches br ON m.branch_id = br.id
+                WHERE m.appraiser_id = %s AND m.is_active = true
+            ''', (appraiser_id,))
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            cursor.close()
+            conn.close()
+    
+    def is_appraiser_mapped_to_bank_branch(self, appraiser_id: str, bank_id: int, branch_id: int) -> bool:
+        """Check if an appraiser is mapped to a specific bank/branch"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute('''
+                SELECT 1 FROM appraiser_bank_branch_map
+                WHERE appraiser_id = %s AND bank_id = %s AND branch_id = %s AND is_active = true
+            ''', (appraiser_id, bank_id, branch_id))
+            return cursor.fetchone() is not None
+        finally:
+            cursor.close()
+            conn.close()
+    
+    def get_appraisers_for_bank_branch(self, bank_id: int, branch_id: int) -> List[Dict[str, Any]]:
+        """Get all appraisers mapped to a specific bank/branch with their face encodings"""
+        conn = self.get_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cursor.execute('''
+                SELECT os.id, os.name, os.appraiser_id, os.image_data, os.face_encoding, os.created_at,
+                       os.email, os.phone, b.bank_name, br.branch_name
+                FROM appraiser_bank_branch_map m
+                JOIN overall_sessions os ON m.appraiser_id = os.appraiser_id AND os.status = 'registered'
+                JOIN banks b ON m.bank_id = b.id
+                JOIN branches br ON m.branch_id = br.id
+                WHERE m.bank_id = %s AND m.branch_id = %s AND m.is_active = true
+            ''', (bank_id, branch_id))
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            cursor.close()
+            conn.close()
+    
+    def verify_appraiser_exists_in_bank_branch(self, name: str, bank_id: int, branch_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Verify if an appraiser with given name exists and is mapped to the bank/branch.
+        First checks the mapping table, then falls back to direct registration check.
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            # First, try to find appraiser by name in overall_sessions
+            cursor.execute('''
+                SELECT os.id, os.appraiser_id, os.name, os.email, os.phone, 
+                       os.bank_id, os.branch_id, os.created_at, os.face_encoding, os.image_data
+                FROM overall_sessions os
+                WHERE os.status = 'registered' AND LOWER(os.name) = LOWER(%s)
+            ''', (name.strip(),))
+            
+            appraiser = cursor.fetchone()
+            
+            if not appraiser:
+                return None
+            
+            # Check if appraiser is mapped to the requested bank/branch
+            cursor.execute('''
+                SELECT 1 FROM appraiser_bank_branch_map
+                WHERE appraiser_id = %s AND bank_id = %s AND branch_id = %s AND is_active = true
+            ''', (appraiser['appraiser_id'], bank_id, branch_id))
+            
+            is_mapped = cursor.fetchone() is not None
+            
+            # If not in mapping table, check if directly registered to this bank/branch
+            if not is_mapped:
+                if appraiser['bank_id'] == bank_id and appraiser['branch_id'] == branch_id:
+                    is_mapped = True
+                    # Auto-create mapping for existing registrations
+                    cursor.execute('''
+                        INSERT INTO appraiser_bank_branch_map (appraiser_id, bank_id, branch_id)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (appraiser_id, bank_id, branch_id) DO NOTHING
+                    ''', (appraiser['appraiser_id'], bank_id, branch_id))
+                    conn.commit()
+            
+            if is_mapped:
+                # Get bank and branch names
+                cursor.execute('SELECT bank_name FROM banks WHERE id = %s', (bank_id,))
+                bank_row = cursor.fetchone()
+                cursor.execute('SELECT branch_name FROM branches WHERE id = %s', (branch_id,))
+                branch_row = cursor.fetchone()
+                
+                return {
+                    'id': appraiser['id'],
+                    'appraiser_id': appraiser['appraiser_id'],
+                    'name': appraiser['name'],
+                    'email': appraiser['email'],
+                    'phone': appraiser['phone'],
+                    'bank_id': bank_id,
+                    'branch_id': branch_id,
+                    'bank_name': bank_row['bank_name'] if bank_row else None,
+                    'branch_name': branch_row['branch_name'] if branch_row else None,
+                    'has_face_encoding': bool(appraiser['face_encoding']),
+                    'has_image': bool(appraiser['image_data']),
+                    'timestamp': str(appraiser['created_at']) if appraiser['created_at'] else None
+                }
+            
+            return None
         finally:
             cursor.close()
             conn.close()

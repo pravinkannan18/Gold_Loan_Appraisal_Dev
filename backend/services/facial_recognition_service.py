@@ -289,6 +289,126 @@ class FacialRecognitionService:
             traceback.print_exc()
             raise Exception(f"Face recognition failed: {str(e)}")
     
+    def identify_appraiser(self, image: str, expected_appraiser_id: str = None, 
+                          expected_name: str = None, bank_id: str = None, 
+                          branch_id: str = None) -> Dict[str, Any]:
+        """Identify a specific appraiser by comparing with their registered face in specific bank/branch context"""
+        try:
+            if not self.is_available():
+                return {
+                    "matches": False,
+                    "message": "Face recognition service is currently unavailable. Please try again later or contact support.",
+                    "service_status": "offline",
+                    "error": "InsightFace library not loaded"
+                }
+            
+            # Convert base64 image to cv2 format
+            img = self.base64_to_cv2_image(image)
+            if img is None:
+                return {
+                    "matches": False,
+                    "message": "Invalid image format. Please capture a clear photo.",
+                    "error": "invalid_image"
+                }
+            
+            # Extract face embedding
+            try:
+                face_data = self.extract_face_embedding(img)
+            except Exception as face_error:
+                error_msg = str(face_error)
+                if "No face detected" in error_msg:
+                    return {
+                        "matches": False,
+                        "message": "No face detected in image. Please position your face clearly in the camera and try again.",
+                        "error": "no_face_detected"
+                    }
+                elif "Multiple faces" in error_msg:
+                    return {
+                        "matches": False,
+                        "message": "Multiple faces detected. Please ensure only one person is in the frame.",
+                        "error": "multiple_faces"
+                    }
+                else:
+                    return {
+                        "matches": False,
+                        "message": f"Face detection failed: {error_msg}",
+                        "error": "face_detection_error"
+                    }
+            
+            query_embedding = face_data["embedding"]
+            
+            # Get the specific appraiser's face encoding from database
+            # If bank_id and branch_id are provided, filter by those as well
+            filters = {}
+            if expected_appraiser_id:
+                filters['appraiser_id'] = expected_appraiser_id
+            if expected_name:
+                filters['name'] = expected_name
+            if bank_id:
+                filters['bank_id'] = int(bank_id)
+            if branch_id:
+                filters['branch_id'] = int(branch_id)
+            
+            known_appraisers = self.db.get_appraisers_by_filters(filters)
+            
+            if not known_appraisers:
+                return {
+                    "matches": False,
+                    "message": f"No appraiser found matching the specified criteria",
+                    "confidence": 0.0
+                }
+            
+            max_sim = -1
+            best_match = None
+            
+            for appraiser in known_appraisers:
+                if not appraiser.get('face_encoding'):
+                    continue
+                
+                try:
+                    known_embedding = np.array(list(map(float, appraiser['face_encoding'].split(","))))
+                    sim = self.cosine_similarity(known_embedding, query_embedding)
+                    
+                    if sim > max_sim:
+                        max_sim = sim
+                        best_match = {
+                            "name": appraiser['name'],
+                            "appraiser_id": appraiser['appraiser_id'],
+                            "similarity": float(sim),
+                            "confidence": float(sim * 100),  # Convert to percentage
+                            "db_id": appraiser['id'],
+                            "image_data": appraiser.get('image_data', ''),
+                            "bank": appraiser.get('bank', ''),
+                            "branch": appraiser.get('branch', ''),
+                            "email": appraiser.get('email', ''),
+                            "phone": appraiser.get('phone', ''),
+                            "appraisals_completed": appraiser.get('appraisals_completed', 0)
+                        }
+                except Exception as e:
+                    print(f"Error processing appraiser {appraiser['name']}: {e}")
+                    continue
+            
+            if best_match and max_sim > self.threshold:
+                return {
+                    "matches": True,
+                    "appraiser": best_match,
+                    "confidence": best_match["confidence"],
+                    "bbox": face_data["bbox"],
+                    "message": f"Face matches {best_match['name']} with {best_match['confidence']:.1f}% confidence"
+                }
+            else:
+                return {
+                    "matches": False,
+                    "confidence": float(max_sim * 100) if max_sim > 0 else 0.0,
+                    "message": f"Face does not match the expected appraiser. Confidence: {max_sim * 100:.1f}%" if max_sim > 0 else "No face encoding found for verification",
+                    "bbox": face_data.get("bbox") if max_sim > 0 else None
+                }
+        
+        except Exception as e:
+            print(f"Face identification error: {e}")
+            traceback.print_exc()
+            raise Exception(f"Face identification failed: {str(e)}")
+    
     def get_registered_appraisers(self) -> List[Dict[str, Any]]:
         """Get list of all registered appraisers"""
         try:

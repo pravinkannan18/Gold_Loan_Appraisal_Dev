@@ -28,7 +28,7 @@ SUPER_ADMIN_PASSWORD = os.getenv("SUPER_ADMIN_PASSWORD", "embsysai@123")
 # JWT Configuration
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "super-admin-secret-key-2024-embsys-gold-loan")
 JWT_ALGORITHM = "HS256"
-JWT_EXPIRATION_MINUTES = 10  # Token valid for 10 minutes
+JWT_EXPIRATION_MINUTES = 60  # Token valid for 60 minutes (increased from 10)
 
 # Blacklisted tokens (for logout)
 BLACKLISTED_TOKENS = set()

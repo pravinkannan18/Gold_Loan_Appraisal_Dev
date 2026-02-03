@@ -41,7 +41,8 @@ from routers import (
     branch,
     admin,
     super_admin,
-    password_reset
+    password_reset,
+    tenant
 )
 
 # ============================================================================
@@ -75,18 +76,20 @@ db = Database()
 camera_service = CameraService()
 facial_service = FacialRecognitionService(db)
 gps_service = GPSService()
-classification_service = ClassificationService()
+# Skip classification service for now to avoid model loading issues
+# classification_service = ClassificationService()
 
 # ============================================================================
 # Router Dependency Injection
 # ============================================================================
 
 appraiser.set_database(db)
+appraiser.set_facial_service(facial_service)  # Inject facial service for face encoding extraction
 session.set_database(db)
 camera.set_service(camera_service)
 face.set_service(facial_service)
 gps.set_service(gps_service)
-classification.set_service(classification_service)
+# classification.set_service(classification_service)
 
 # ============================================================================
 # Register Routers
@@ -99,12 +102,13 @@ app.include_router(camera.router)
 app.include_router(face.router)
 app.include_router(gps.router)
 app.include_router(webrtc.router)
-app.include_router(classification.router)
+# app.include_router(classification.router)
 app.include_router(bank.router)
 app.include_router(branch.router)
 app.include_router(admin.router)
 app.include_router(super_admin.router)
 app.include_router(password_reset.router)
+app.include_router(tenant.router)
 
 # ============================================================================
 # API Endpoints

@@ -108,18 +108,73 @@ class Database:
             self.connection_params = None
     
     def get_connection(self):
-        """Get a connection from the pool"""
-        try:
-            return self._pool.getconn()
-        except Exception as e:
-            raise e
+        """Get a connection from the pool with validation"""
+        max_attempts = 3
+        
+        for attempt in range(max_attempts):
+            try:
+                conn = self._pool.getconn()
+                # Validate connection is healthy
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT 1")
+                    cursor.close()
+                    return conn  # Connection is valid
+                except Exception:
+                    # Connection is stale, close and try again
+                    try:
+                        self._pool.putconn(conn, close=True)
+                    except Exception:
+                        pass
+                    if attempt == max_attempts - 1:
+                        raise RuntimeError("No healthy database connection available after retries")
+                    continue
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Failed to get database connection (attempt {attempt + 1}/{max_attempts}): {e}")
+                if attempt == max_attempts - 1:
+                    raise
     
-    def return_connection(self, conn):
-        """Return a connection to the pool"""
+    def return_connection(self, conn, close: bool = False):
+        """Return a connection to the pool safely"""
         try:
-            self._pool.putconn(conn)
-        except Exception:
-            pass
+            if conn:
+                # Check if connection is still usable
+                if conn.closed:
+                    return  # Already closed, nothing to do
+                self._pool.putconn(conn, close=close)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Error returning connection to pool: {e}")
+    
+    def close(self):
+        """Close all connections in the pool"""
+        global _connection_pool
+        try:
+            if self._pool:
+                self._pool.closeall()
+                _connection_pool = None
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Error closing connection pool: {e}")
+    
+    def test_connection(self) -> bool:
+        """Test if database connection is working"""
+        conn = None
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+            cursor.close()
+            return True
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Database connection test failed: {e}")
+            return False
+        finally:
+            if conn:
+                self.return_connection(conn)
     
     def reset_database(self):
         """Reset database by dropping all known tables"""
@@ -715,14 +770,6 @@ class Database:
         finally:
             cursor.close()
             self.return_connection(conn)
-
-    def test_connection(self) -> bool:
-        try:
-            conn = self.get_connection()
-            self.return_connection(conn)
-            return True
-        except Exception:
-            return False
 
     # =========================================================================
     # Tenant Management Methods
@@ -1592,9 +1639,6 @@ class Database:
         finally:
             cursor.close()
             self.return_connection(conn)
-
-    def close(self):
-        pass
 
     # =========================================================================
     # Face Recognition & Appraiser Registration

@@ -3,7 +3,7 @@ Admin management API router
 Handles all admin-related operations including tenant users management
 """
 from fastapi import APIRouter, HTTPException, Depends, Header
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
 from models.database import get_db
@@ -48,14 +48,14 @@ class AdminLoginResponse(BaseModel):
 
 @router.post("/login", response_model=AdminLoginResponse)
 async def admin_login(login_data: AdminLoginRequest, db: Session = Depends(get_db)) -> AdminLoginResponse:
-    """Admin login endpoint with support for branch-specific authentication"""
+    """Admin login endpoint with support for branch admin authentication from dedicated branch_admins table"""
     try:
         cursor = db.cursor()
         
-        # Check if it's a branch-specific login (using branch admin credentials from tenant_users)
+        # Branch admin login - Use dedicated branch_admins table
         if login_data.role == 'branch_admin':
-            # Branch admin login using email/password set by bank admin
-            # Also verify they have access to the specified bank and branch
+            # Branch admin login using the dedicated branch_admins table
+            # Verify they have access to the specified bank and branch
             if not login_data.bank_id or not login_data.branch_id:
                 cursor.close()
                 return AdminLoginResponse(
@@ -64,25 +64,31 @@ async def admin_login(login_data: AdminLoginRequest, db: Session = Depends(get_d
                 )
             
             password_hash = hash_password(login_data.password)
+            
+            # Query the dedicated branch_admins table
             cursor.execute("""
-                SELECT tu.id, tu.full_name, tu.email, tu.user_role, tu.bank_id, tu.branch_id,
-                       b.branch_name, bk.bank_name, tu.face_encoding as password_hash
-                FROM tenant_users tu
-                LEFT JOIN branches b ON tu.branch_id = b.id
-                LEFT JOIN banks bk ON tu.bank_id = bk.id
-                WHERE tu.email = %s AND tu.user_role = 'branch_admin' 
-                AND tu.face_encoding = %s AND tu.is_active = true
-                AND tu.bank_id = %s AND tu.branch_id = %s
+                SELECT ba.id, ba.full_name, ba.email, ba.bank_id, ba.branch_id,
+                       br.branch_name, bk.bank_name, ba.password_hash, ba.permissions
+                FROM branch_admins ba
+                JOIN branches br ON ba.branch_id = br.id
+                JOIN banks bk ON ba.bank_id = bk.id
+                WHERE ba.email = %s AND ba.password_hash = %s
+                AND ba.is_active = true
+                AND ba.bank_id = %s AND ba.branch_id = %s
             """, (login_data.email, password_hash, login_data.bank_id, login_data.branch_id))
             
             admin = cursor.fetchone()
             if admin:
                 # Update last login
                 cursor.execute("""
-                    UPDATE tenant_users SET last_login = CURRENT_TIMESTAMP WHERE id = %s
+                    UPDATE branch_admins SET last_login = CURRENT_TIMESTAMP WHERE id = %s
                 """, (admin[0],))
                 db.commit()
                 cursor.close()
+                
+                logger.info(f"Branch admin login successful: {admin[2]} "
+                          f"(Bank: {admin[6]}, Branch: {admin[5]})")
+                
                 return AdminLoginResponse(
                     success=True,
                     message="Branch admin login successful",
@@ -91,14 +97,17 @@ async def admin_login(login_data: AdminLoginRequest, db: Session = Depends(get_d
                         "name": admin[1] or "Branch Admin",
                         "email": admin[2],
                         "role": "branch_admin",
-                        "bank_id": admin[4],
-                        "branch_id": admin[5],
-                        "bank_name": admin[7],
-                        "branch_name": admin[6]
+                        "bank_id": admin[3],
+                        "branch_id": admin[4],
+                        "bank_name": admin[6],
+                        "branch_name": admin[5],
+                        "permissions": admin[8] or {}
                     }
                 )
             else:
                 cursor.close()
+                logger.warning(f"Branch admin login failed: {login_data.email} "
+                             f"(Bank: {login_data.bank_id}, Branch: {login_data.branch_id})")
                 return AdminLoginResponse(
                     success=False,
                     message="Invalid credentials or you don't have access to the selected branch"
@@ -749,9 +758,9 @@ class BranchAdminCreate(BaseModel):
     phone: Optional[str] = None
 
 class BranchAdminResponse(BaseModel):
-    """Branch admin response model"""
+    """Branch admin response model - matches branch_admins table structure"""
     id: int
-    user_id: str
+    admin_id: str  # Changed from user_id to admin_id
     branch_id: int
     bank_id: int
     email: str
@@ -759,18 +768,23 @@ class BranchAdminResponse(BaseModel):
     full_name: str
     is_active: bool
     created_at: Optional[str]
+    last_login: Optional[datetime] = None
+    permissions: Dict[str, Any] = {}
     branch_name: Optional[str]
+    branch_code: Optional[str]
     bank_name: Optional[str]
+    bank_code: Optional[str]
+    created_by: Optional[int] = None
 
 @router.post("/branch-admin", response_model=BranchAdminResponse)
 async def create_branch_admin(data: BranchAdminCreate, db = Depends(get_db)):
-    """Create a new branch admin (Bank Admin only)"""
+    """Create a new branch admin (Bank Admin only) - stores in dedicated branch_admins table"""
     try:
         cursor = db.cursor()
         
         # Check if branch exists and get bank_id
         cursor.execute("""
-            SELECT b.id, b.branch_name, b.bank_id, bk.bank_name 
+            SELECT b.id, b.branch_name, b.bank_id, bk.bank_name, bk.bank_code, b.branch_code
             FROM branches b
             LEFT JOIN banks bk ON b.bank_id = bk.id
             WHERE b.id = %s
@@ -780,41 +794,47 @@ async def create_branch_admin(data: BranchAdminCreate, db = Depends(get_db)):
         if not branch:
             raise HTTPException(status_code=404, detail="Branch not found")
         
-        branch_id, branch_name, bank_id, bank_name = branch
+        branch_id, branch_name, bank_id, bank_name, bank_code, branch_code = branch
         
-        # Check if email already exists in tenant_users
-        cursor.execute("SELECT id FROM tenant_users WHERE email = %s", (data.email,))
+        # Check if email already exists in branch_admins for this bank/branch
+        cursor.execute("""
+            SELECT id FROM branch_admins 
+            WHERE email = %s AND bank_id = %s AND branch_id = %s
+        """, (data.email, bank_id, branch_id))
         if cursor.fetchone():
-            raise HTTPException(status_code=400, detail="Email already exists")
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Email already exists for this branch. Please use a different email."
+            )
         
-        # Generate unique user_id
+        # Generate unique admin_id
         import uuid
-        user_id = f"BA_{bank_id}_{branch_id}_{str(uuid.uuid4())[:8]}"
+        admin_id = f"BA_{bank_id}_{branch_id}_{str(uuid.uuid4())[:8]}".upper()
         
         # Hash password for branch admin login
         password_hash = hash_password(data.password)
         
-        # For branch admins, we store them in tenant_users table with password hash in face_encoding field
+        # Insert into dedicated branch_admins table
         cursor.execute("""
-            INSERT INTO tenant_users (
-                user_id, bank_id, branch_id, full_name, email, phone, 
-                user_role, face_encoding, is_active, created_at
+            INSERT INTO branch_admins (
+                bank_id, branch_id, admin_id, full_name, email, phone, 
+                password_hash, permissions, is_active, created_at
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
             RETURNING id
         """, (
-            user_id, bank_id, branch_id, data.full_name, 
-            data.email, data.phone, 'branch_admin', password_hash, True
+            bank_id, branch_id, admin_id, data.full_name, 
+            data.email, data.phone, password_hash, '{}', True
         ))
         
         new_id = cursor.fetchone()[0]
         db.commit()
         cursor.close()
         
-        logger.info(f"Created branch admin: {data.email} for branch {branch_name}")
+        logger.info(f"Created branch admin in branch_admins table: {data.email} for branch {branch_name} (Bank: {bank_name})")
         
         return BranchAdminResponse(
             id=new_id,
-            user_id=user_id,
+            admin_id=admin_id,
             branch_id=branch_id,
             bank_id=bank_id,
             email=data.email,
@@ -823,7 +843,12 @@ async def create_branch_admin(data: BranchAdminCreate, db = Depends(get_db)):
             is_active=True,
             created_at=str(datetime.now()),
             branch_name=branch_name,
-            bank_name=bank_name
+            bank_name=bank_name,
+            bank_code=bank_code,
+            branch_code=branch_code,
+            permissions={},
+            last_login=None,
+            created_by=None
         )
         
     except HTTPException:
@@ -835,18 +860,18 @@ async def create_branch_admin(data: BranchAdminCreate, db = Depends(get_db)):
 
 @router.get("/branch-admins/{bank_id}", response_model=List[BranchAdminResponse])
 async def get_branch_admins(bank_id: int, db = Depends(get_db)):
-    """Get all branch admins for a bank (Bank Admin only)"""
+    """Get all branch admins for a bank (Bank Admin only) - reads from branch_admins table"""
     try:
         cursor = db.cursor()
         cursor.execute("""
-            SELECT tu.id, tu.user_id, tu.branch_id, tu.bank_id, tu.email, tu.phone, 
-                   tu.full_name, tu.is_active, tu.created_at,
-                   b.branch_name, bk.bank_name
-            FROM tenant_users tu
-            LEFT JOIN branches b ON tu.branch_id = b.id
-            LEFT JOIN banks bk ON tu.bank_id = bk.id
-            WHERE tu.bank_id = %s AND tu.user_role = 'branch_admin'
-            ORDER BY tu.created_at DESC
+            SELECT ba.id, ba.admin_id, ba.branch_id, ba.bank_id, ba.email, ba.phone, 
+                   ba.full_name, ba.is_active, ba.created_at, ba.last_login, ba.permissions,
+                   b.branch_name, b.branch_code, bk.bank_name, bk.bank_code
+            FROM branch_admins ba
+            LEFT JOIN branches b ON ba.branch_id = b.id
+            LEFT JOIN banks bk ON ba.bank_id = bk.id
+            WHERE ba.bank_id = %s
+            ORDER BY ba.created_at DESC
         """, (bank_id,))
         
         rows = cursor.fetchall()
@@ -855,7 +880,7 @@ async def get_branch_admins(bank_id: int, db = Depends(get_db)):
         return [
             BranchAdminResponse(
                 id=row[0],
-                user_id=row[1],
+                admin_id=row[1],
                 branch_id=row[2],
                 bank_id=row[3],
                 email=row[4],
@@ -863,8 +888,12 @@ async def get_branch_admins(bank_id: int, db = Depends(get_db)):
                 full_name=row[6],
                 is_active=row[7],
                 created_at=str(row[8]) if row[8] else None,
-                branch_name=row[9],
-                bank_name=row[10]
+                last_login=row[9],
+                permissions=row[10] or {},
+                branch_name=row[11],
+                branch_code=row[12],
+                bank_name=row[13],
+                bank_code=row[14]
             )
             for row in rows
         ]
@@ -875,28 +904,29 @@ async def get_branch_admins(bank_id: int, db = Depends(get_db)):
 
 @router.delete("/branch-admin/{admin_id}")
 async def delete_branch_admin(admin_id: int, db = Depends(get_db)):
-    """Delete a branch admin (Bank Admin only)"""
+    """Delete a branch admin (Bank Admin only) - soft delete in branch_admins table"""
     try:
         cursor = db.cursor()
         
-        # Check if admin exists
+        # Check if admin exists in branch_admins table
         cursor.execute("""
-            SELECT id FROM tenant_users 
-            WHERE id = %s AND user_role = 'branch_admin'
+            SELECT id FROM branch_admins 
+            WHERE id = %s
         """, (admin_id,))
         if not cursor.fetchone():
             raise HTTPException(status_code=404, detail="Branch admin not found")
         
-        # Delete admin
+        # Soft delete admin (set is_active to false)
         cursor.execute("""
-            DELETE FROM tenant_users 
-            WHERE id = %s AND user_role = 'branch_admin'
+            UPDATE branch_admins 
+            SET is_active = false, updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
         """, (admin_id,))
         db.commit()
         cursor.close()
         
-        logger.info(f"Deleted branch admin {admin_id}")
-        return {"message": "Branch admin deleted successfully"}
+        logger.info(f"Deactivated branch admin {admin_id}")
+        return {"message": "Branch admin deactivated successfully"}
         
     except HTTPException:
         raise

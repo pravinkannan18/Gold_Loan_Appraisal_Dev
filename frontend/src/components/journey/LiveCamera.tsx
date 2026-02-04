@@ -111,7 +111,19 @@ export const LiveCamera = forwardRef<LiveCameraHandle, LiveCameraProps>(
     }
 
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: deviceIdToUse ? { deviceId: { exact: deviceIdToUse } } : { facingMode: 'user' },
+      video: deviceIdToUse 
+        ? { 
+            deviceId: { exact: deviceIdToUse },
+            width: { ideal: 3840, min: 1280 },
+            height: { ideal: 2160, min: 720 },
+            aspectRatio: { ideal: 16/9 }
+          } 
+        : { 
+            facingMode: 'user',
+            width: { ideal: 3840, min: 1280 },
+            height: { ideal: 2160, min: 720 },
+            aspectRatio: { ideal: 16/9 }
+          },
       audio: false,
     });
 
@@ -201,7 +213,7 @@ export const LiveCamera = forwardRef<LiveCameraHandle, LiveCameraProps>(
       }
 
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const imageData = canvas.toDataURL('image/jpeg', 0.9);
+      const imageData = canvas.toDataURL('image/jpeg', 1.0);
 
       // Validate the captured image
       if (!imageData || imageData === 'data:,' || imageData.length < 100) {

@@ -92,14 +92,16 @@ export class WebRTCService {
                 video: cameraId
                     ? {
                         deviceId: { exact: cameraId },
-                        width: { ideal: 640, max: 640 },
-                        height: { ideal: 480, max: 480 },
-                        frameRate: { ideal: 15, max: 20 }
+                        width: { ideal: 3840, min: 1280 },
+                        height: { ideal: 2160, min: 720 },
+                        aspectRatio: { ideal: 16/9 },
+                        frameRate: { ideal: 15, max: 30 }
                     }
                     : {
-                        width: { ideal: 640, max: 640 },
-                        height: { ideal: 480, max: 480 },
-                        frameRate: { ideal: 15, max: 20 }
+                        width: { ideal: 3840, min: 1280 },
+                        height: { ideal: 2160, min: 720 },
+                        aspectRatio: { ideal: 16/9 },
+                        frameRate: { ideal: 15, max: 30 }
                     },
                 audio: false
             };
@@ -231,11 +233,13 @@ export class WebRTCService {
                 const ctx = this.canvasElement.getContext('2d');
                 if (!ctx) return;
 
-                // Draw video frame to canvas (320x240 for faster processing)
+                // Draw video frame to canvas (original video size for best quality)
+                this.canvasElement.width = this.videoElement.videoWidth;
+                this.canvasElement.height = this.videoElement.videoHeight;
                 ctx.drawImage(this.videoElement, 0, 0, this.canvasElement.width, this.canvasElement.height);
 
-                // Convert to base64 with lower quality for faster transfer
-                const frameData = this.canvasElement.toDataURL('image/jpeg', 0.5);
+                // Convert to base64 with original quality
+                const frameData = this.canvasElement.toDataURL('image/jpeg', 1.0);
 
                 // Send to server
                 this.session.websocket.send(JSON.stringify({
@@ -261,14 +265,16 @@ export class WebRTCService {
                 video: cameraId
                     ? {
                         deviceId: { exact: cameraId },
-                        width: { ideal: 640, max: 640 },
-                        height: { ideal: 480, max: 480 },
-                        frameRate: { ideal: 15, max: 20 }
+                        width: { ideal: 3840, min: 1280 },
+                        height: { ideal: 2160, min: 720 },
+                        aspectRatio: { ideal: 16/9 },
+                        frameRate: { ideal: 15, max: 30 }
                     }
                     : {
-                        width: { ideal: 640, max: 640 },
-                        height: { ideal: 480, max: 480 },
-                        frameRate: { ideal: 15, max: 20 }
+                        width: { ideal: 3840, min: 1280 },
+                        height: { ideal: 2160, min: 720 },
+                        aspectRatio: { ideal: 16/9 },
+                        frameRate: { ideal: 15, max: 30 }
                     },
                 audio: false
             };

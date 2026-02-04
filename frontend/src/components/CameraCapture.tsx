@@ -47,8 +47,9 @@ const CameraCapture = forwardRef<CameraCaptureRef, CameraCaptureProps>(
         stream = await navigator.mediaDevices.getUserMedia({
           video: { 
             facingMode: { ideal: "environment" },
-            width: { ideal: 1920 },
-            height: { ideal: 1080 }
+            width: { ideal: 3840, min: 1280 },
+            height: { ideal: 2160, min: 720 },
+            aspectRatio: { ideal: 16/9 }
           },
         });
       } catch (envError) {
@@ -56,8 +57,9 @@ const CameraCapture = forwardRef<CameraCaptureRef, CameraCaptureProps>(
         console.warn("Environment camera not available, trying default camera:", envError);
         stream = await navigator.mediaDevices.getUserMedia({
           video: {
-            width: { ideal: 1920 },
-            height: { ideal: 1080 }
+            width: { ideal: 3840, min: 1280 },
+            height: { ideal: 2160, min: 720 },
+            aspectRatio: { ideal: 16/9 }
           },
         });
       }
@@ -110,7 +112,7 @@ const CameraCapture = forwardRef<CameraCaptureRef, CameraCaptureProps>(
       const ctx = canvas.getContext("2d");
       if (ctx) {
         ctx.drawImage(videoRef.current, 0, 0);
-        const imageDataUrl = canvas.toDataURL("image/jpeg", 0.8);
+        const imageDataUrl = canvas.toDataURL("image/jpeg", 1.0);
         onCapture(imageDataUrl);
         stopCamera();
       }
@@ -157,6 +159,7 @@ const CameraCapture = forwardRef<CameraCaptureRef, CameraCaptureProps>(
             playsInline
             muted
             className="w-full rounded-lg border border-border"
+            style={{ maxHeight: "600px", objectFit: "contain" }}
           />
           <Button onClick={capturePhoto} className="w-full bg-gradient-to-r from-yellow-500 to-amber-600 hover:from-yellow-600 hover:to-amber-700 text-white">
             <Camera className="mr-2 h-4 w-4" />

@@ -39,6 +39,7 @@ from routers import (
     classification,
     bank,
     branch,
+    branch_admin,
     admin,
     super_admin,
     password_reset,
@@ -105,6 +106,7 @@ app.include_router(webrtc.router)
 # app.include_router(classification.router)
 app.include_router(bank.router)
 app.include_router(branch.router)
+app.include_router(branch_admin.router)
 app.include_router(admin.router)
 app.include_router(super_admin.router)
 app.include_router(password_reset.router)

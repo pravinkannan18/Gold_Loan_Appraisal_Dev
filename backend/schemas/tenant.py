@@ -22,7 +22,8 @@ from .common import TimestampMixin, ContactInfo, AddressInfo, SystemConfiguratio
 class UserRole(str, Enum):
     """User roles in the tenant hierarchy"""
     SUPER_ADMIN = "super_admin"
-    BANK_ADMIN = "bank_admin" 
+    BANK_ADMIN = "bank_admin"
+    BRANCH_ADMIN = "branch_admin"  # New: Dedicated branch administrator role
     BRANCH_MANAGER = "branch_manager"
     SENIOR_APPRAISER = "senior_appraiser"
     APPRAISER = "appraiser"
@@ -364,4 +365,77 @@ class AdminUserUpdate(BaseModel):
     employee_id: Optional[str] = Field(None, max_length=50)
     bank_id: Optional[int] = None
     branch_id: Optional[int] = None
+
+# ============================================================================
+# Branch Admin Models
+# ============================================================================
+
+class BranchAdminPermissions(BaseModel):
+    """Permissions for branch administrators"""
+    can_view_appraisals: bool = Field(True, description="Can view branch appraisals")
+    can_manage_appraisers: bool = Field(True, description="Can manage branch appraisers")
+    can_view_reports: bool = Field(True, description="Can view branch reports")
+    can_export_data: bool = Field(True, description="Can export branch data")
+    can_approve_sessions: bool = Field(False, description="Can approve appraisal sessions")
+    max_approval_amount: Optional[float] = Field(None, description="Maximum approval amount")
+
+class BranchAdminBase(BaseModel):
+    """Base branch admin model"""
+    admin_id: str = Field(..., min_length=1, max_length=50, description="Unique admin identifier")
+    full_name: str = Field(..., min_length=1, max_length=255, description="Full name")
+    email: EmailStr = Field(..., description="Email address (unique per branch)")
+    phone: Optional[str] = Field(None, max_length=20, description="Phone number")
+    
+    @validator('admin_id')
+    def validate_admin_id(cls, v):
+        if not v.replace('_', '').replace('-', '').isalnum():
+            raise ValueError('Admin ID must be alphanumeric (underscores and hyphens allowed)')
+        return v.upper()
+
+class BranchAdminCreate(BranchAdminBase):
+    """Schema for creating a new branch admin"""
+    bank_id: int = Field(..., description="Bank ID")
+    branch_id: int = Field(..., description="Branch ID (must belong to bank)")
+    password: str = Field(..., min_length=8, description="Password (min 8 characters)")
+    permissions: Optional[BranchAdminPermissions] = Field(None, description="Admin permissions")
+
+class BranchAdminUpdate(BaseModel):
+    """Schema for updating branch admin"""
+    full_name: Optional[str] = Field(None, min_length=1, max_length=255)
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = Field(None, max_length=20)
+    password: Optional[str] = Field(None, min_length=8, description="New password")
+    permissions: Optional[BranchAdminPermissions] = None
+    is_active: Optional[bool] = None
+
+class BranchAdminResponse(BranchAdminBase, TimestampMixin):
+    """Response model for branch admin"""
+    id: int
+    bank_id: int
+    branch_id: int
+    bank_name: str
+    bank_code: str
+    branch_name: str
+    branch_code: str
+    permissions: BranchAdminPermissions
+    is_active: bool = True
+    last_login: Optional[datetime] = None
+    created_by: Optional[int] = None
+    
+    class Config:
+        from_attributes = True
+
+class BranchAdminLoginRequest(BaseModel):
+    """Branch admin login request"""
+    email: EmailStr
+    password: str
+    bank_id: int = Field(..., description="Bank ID")
+    branch_id: int = Field(..., description="Branch ID")
+
+class BranchAdminLoginResponse(BaseModel):
+    """Branch admin login response"""
+    success: bool
+    message: str
+    admin: Optional[BranchAdminResponse] = None
+    token: Optional[str] = Field(None, description="Authentication token")
     is_active: Optional[bool] = None

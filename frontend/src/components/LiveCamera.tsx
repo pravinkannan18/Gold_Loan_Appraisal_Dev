@@ -121,7 +121,18 @@ const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>((props, ref) => {
       }
       
       const constraints: MediaStreamConstraints = {
-        video: deviceId ? { deviceId: { exact: deviceId } } : true,
+        video: deviceId 
+          ? { 
+              deviceId: { exact: deviceId },
+              width: { ideal: 3840, min: 1280 },
+              height: { ideal: 2160, min: 720 },
+              aspectRatio: { ideal: 16/9 }
+            } 
+          : {
+              width: { ideal: 3840, min: 1280 },
+              height: { ideal: 2160, min: 720 },
+              aspectRatio: { ideal: 16/9 }
+            },
       };
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       if (videoRef.current) {
@@ -212,7 +223,7 @@ const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>((props, ref) => {
       const ctx = canvas.getContext("2d");
       if (!ctx) throw new Error("Canvas context missing");
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+      const dataUrl = canvas.toDataURL("image/jpeg", 1.0);
       onCapture(dataUrl);
       toast({ title: "Success", description: "Image captured successfully" });
     } catch {
@@ -236,7 +247,7 @@ const LiveCamera = forwardRef<LiveCameraRef, LiveCameraProps>((props, ref) => {
       )}
       {/* No manual device selector UI */}
       <div className="relative rounded-lg overflow-hidden bg-black">
-        <video ref={videoRef} autoPlay playsInline muted className="w-full rounded-lg" style={{ maxHeight: "60vh" }} />
+        <video ref={videoRef} autoPlay playsInline muted className="w-full rounded-lg" style={{ maxHeight: "600px", objectFit: "contain" }} />
         {isStreaming && (
           <div className="absolute top-4 left-4 flex items-center gap-2 bg-red-500 text-white px-3 py-1 rounded-full text-sm font-semibold animate-pulse">
             <div className="w-2 h-2 bg-white rounded-full animate-pulse" />

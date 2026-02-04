@@ -175,6 +175,47 @@ class Database:
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_tenant_users_bank_user ON tenant_users(bank_id, user_id)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_tenant_users_branch ON tenant_users(branch_id)')
             
+            # Branch Admins Table - Dedicated table for branch administrators
+            # Provides structural separation and explicit permission scoping
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS branch_admins (
+                    id SERIAL PRIMARY KEY,
+                    bank_id INTEGER NOT NULL REFERENCES banks(id) ON DELETE CASCADE,
+                    branch_id INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+                    
+                    /* Admin Information */
+                    admin_id VARCHAR(50) NOT NULL,
+                    full_name VARCHAR(255) NOT NULL,
+                    email VARCHAR(255) NOT NULL,
+                    phone VARCHAR(20),
+                    
+                    /* Authentication - Password hash stored in password_hash field */
+                    password_hash TEXT NOT NULL,
+                    
+                    /* Permissions - Branch-specific permissions only */
+                    permissions JSONB DEFAULT '{}',
+                    
+                    /* Status */
+                    is_active BOOLEAN DEFAULT true,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_login TIMESTAMP,
+                    created_by INTEGER,  -- References user who created this admin
+                    
+                    /* Constraints */
+                    UNIQUE(bank_id, branch_id, email),
+                    UNIQUE(bank_id, branch_id, admin_id)
+                    
+                    /* Note: Branch-bank relationship validated by foreign keys and application logic */
+                )
+            ''')
+            
+            # Create indexes for branch_admins
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_branch_admins_bank ON branch_admins(bank_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_branch_admins_branch ON branch_admins(branch_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_branch_admins_email ON branch_admins(email)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_branch_admins_active ON branch_admins(is_active) WHERE is_active = true')
+            
             # Appraiser Bank Branch Mapping Table - For multi-bank/branch support
             # An appraiser can be mapped to multiple bank/branch combinations
             cursor.execute('''
@@ -821,6 +862,273 @@ class Database:
             ''', (branch_id,))
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
+        finally:
+            cursor.close()
+            conn.close()
+    
+    # =========================================================================
+    # Branch Admin Management Methods
+    # =========================================================================
+    
+    def create_branch_admin(self, bank_id: int, branch_id: int, admin_id: str,
+                           full_name: str, email: str, password_hash: str,
+                           phone: str = None, permissions: Dict = None,
+                           created_by: int = None) -> int:
+        """
+        Create a new branch admin with exclusive access to their branch.
+        
+        Args:
+            bank_id: ID of the bank
+            branch_id: ID of the branch (must belong to the bank)
+            admin_id: Unique identifier for the admin
+            full_name: Full name of the admin
+            email: Email address (must be unique per bank/branch)
+            password_hash: Hashed password for authentication
+            phone: Phone number (optional)
+            permissions: Branch-specific permissions (optional)
+            created_by: ID of user who created this admin (optional)
+            
+        Returns:
+            ID of the created branch admin
+            
+        Raises:
+            Exception: If branch doesn't belong to bank or duplicate admin exists
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            # Verify branch belongs to bank
+            cursor.execute('''
+                SELECT 1 FROM branches 
+                WHERE id = %s AND bank_id = %s AND is_active = true
+            ''', (branch_id, bank_id))
+            
+            if not cursor.fetchone():
+                raise ValueError(f"Branch {branch_id} does not belong to bank {bank_id} or is inactive")
+            
+            # Create branch admin
+            cursor.execute('''
+                INSERT INTO branch_admins (
+                    bank_id, branch_id, admin_id, full_name, email, phone,
+                    password_hash, permissions, created_by
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            ''', (
+                bank_id, branch_id, admin_id, full_name, email, phone,
+                password_hash, json.dumps(permissions or {}), created_by
+            ))
+            
+            admin_id_result = cursor.fetchone()[0]
+            conn.commit()
+            return admin_id_result
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            cursor.close()
+            conn.close()
+    
+    def get_branch_admin_by_email(self, email: str, bank_id: int = None, 
+                                  branch_id: int = None) -> Optional[Dict[str, Any]]:
+        """
+        Get branch admin by email with optional bank/branch filtering.
+        Used for authentication and authorization.
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            query = '''
+                SELECT ba.*, 
+                       b.bank_name, b.bank_code,
+                       br.branch_name, br.branch_code
+                FROM branch_admins ba
+                JOIN banks b ON ba.bank_id = b.id
+                JOIN branches br ON ba.branch_id = br.id
+                WHERE ba.email = %s AND ba.is_active = true
+            '''
+            params = [email]
+            
+            if bank_id:
+                query += ' AND ba.bank_id = %s'
+                params.append(bank_id)
+            
+            if branch_id:
+                query += ' AND ba.branch_id = %s'
+                params.append(branch_id)
+            
+            cursor.execute(query, params)
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            cursor.close()
+            conn.close()
+    
+    def get_branch_admin_by_id(self, admin_id: int) -> Optional[Dict[str, Any]]:
+        """Get branch admin by ID"""
+        conn = self.get_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cursor.execute('''
+                SELECT ba.*, 
+                       b.bank_name, b.bank_code,
+                       br.branch_name, br.branch_code
+                FROM branch_admins ba
+                JOIN banks b ON ba.bank_id = b.id
+                JOIN branches br ON ba.branch_id = br.id
+                WHERE ba.id = %s
+            ''', (admin_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            cursor.close()
+            conn.close()
+    
+    def get_branch_admins_by_bank(self, bank_id: int) -> List[Dict[str, Any]]:
+        """Get all branch admins for a specific bank"""
+        conn = self.get_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cursor.execute('''
+                SELECT ba.*, 
+                       b.bank_name, b.bank_code,
+                       br.branch_name, br.branch_code
+                FROM branch_admins ba
+                JOIN banks b ON ba.bank_id = b.id
+                JOIN branches br ON ba.branch_id = br.id
+                WHERE ba.bank_id = %s AND ba.is_active = true
+                ORDER BY br.branch_name, ba.full_name
+            ''', (bank_id,))
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            cursor.close()
+            conn.close()
+    
+    def get_branch_admins_by_branch(self, branch_id: int) -> List[Dict[str, Any]]:
+        """Get all admins for a specific branch"""
+        conn = self.get_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        try:
+            cursor.execute('''
+                SELECT ba.*, 
+                       b.bank_name, b.bank_code,
+                       br.branch_name, br.branch_code
+                FROM branch_admins ba
+                JOIN banks b ON ba.bank_id = b.id
+                JOIN branches br ON ba.branch_id = br.id
+                WHERE ba.branch_id = %s AND ba.is_active = true
+                ORDER BY ba.full_name
+            ''', (branch_id,))
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            cursor.close()
+            conn.close()
+    
+    def update_branch_admin(self, admin_id: int, 
+                           full_name: str = None, email: str = None,
+                           phone: str = None, password_hash: str = None,
+                           permissions: Dict = None, is_active: bool = None) -> bool:
+        """Update branch admin information"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            updates = []
+            params = []
+            
+            if full_name is not None:
+                updates.append("full_name = %s")
+                params.append(full_name)
+            
+            if email is not None:
+                updates.append("email = %s")
+                params.append(email)
+            
+            if phone is not None:
+                updates.append("phone = %s")
+                params.append(phone)
+            
+            if password_hash is not None:
+                updates.append("password_hash = %s")
+                params.append(password_hash)
+            
+            if permissions is not None:
+                updates.append("permissions = %s")
+                params.append(json.dumps(permissions))
+            
+            if is_active is not None:
+                updates.append("is_active = %s")
+                params.append(is_active)
+            
+            if not updates:
+                return True
+            
+            updates.append("updated_at = CURRENT_TIMESTAMP")
+            params.append(admin_id)
+            
+            query = f"UPDATE branch_admins SET {', '.join(updates)} WHERE id = %s"
+            cursor.execute(query, params)
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            cursor.close()
+            conn.close()
+    
+    def delete_branch_admin(self, admin_id: int) -> bool:
+        """Soft delete (deactivate) a branch admin"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute('''
+                UPDATE branch_admins 
+                SET is_active = false, updated_at = CURRENT_TIMESTAMP 
+                WHERE id = %s
+            ''', (admin_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            cursor.close()
+            conn.close()
+    
+    def verify_branch_admin_access(self, admin_id: int, bank_id: int, 
+                                   branch_id: int) -> bool:
+        """
+        Verify that a branch admin has access to the specified bank/branch.
+        This is critical for authorization checks.
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute('''
+                SELECT 1 FROM branch_admins
+                WHERE id = %s AND bank_id = %s AND branch_id = %s 
+                AND is_active = true
+            ''', (admin_id, bank_id, branch_id))
+            return cursor.fetchone() is not None
+        finally:
+            cursor.close()
+            conn.close()
+    
+    def update_branch_admin_login(self, admin_id: int) -> None:
+        """Update last login timestamp for branch admin"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute('''
+                UPDATE branch_admins 
+                SET last_login = CURRENT_TIMESTAMP 
+                WHERE id = %s
+            ''', (admin_id,))
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
         finally:
             cursor.close()
             conn.close()

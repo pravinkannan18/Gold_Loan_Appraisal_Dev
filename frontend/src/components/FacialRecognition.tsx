@@ -244,17 +244,18 @@ const FacialRecognition = ({ onAppraiserIdentified, onNewAppraiserRequired, onCa
 
       // Use the real backend API for facial recognition with bank/branch context
       setAnalysisMessage("Connecting to recognition service...");
-      const formData = new FormData();
-      formData.append('image', imageData);
-      formData.append('appraiser_id', appraiser.appraiser_id || appraiser.id);
-      formData.append('name', appraiser.name);
-      formData.append('bank_id', selectedBankId);
-      formData.append('branch_id', selectedBranchId);
-
+      
       // Use /api/face/identify instead of /recognize for bank/branch-specific verification
       const response = await fetch(`${import.meta.env.VITE_API_URL}/api/face/identify`, {
         method: 'POST',
-        body: formData
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image: imageData,
+          appraiser_id: appraiser.appraiser_id || appraiser.id,
+          name: appraiser.name,
+          bank_id: parseInt(selectedBankId),
+          branch_id: parseInt(selectedBranchId)
+        })
       });
 
       const data = await response.json();

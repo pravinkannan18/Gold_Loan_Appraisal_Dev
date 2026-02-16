@@ -12,6 +12,8 @@ from typing import Dict, Optional, Any
 from dataclasses import dataclass, field
 from datetime import datetime
 import logging
+import numpy as np
+import av
 
 # Try to import aiortc
 try:
@@ -68,10 +70,13 @@ class WebRTCManager:
         if AIORTC_AVAILABLE:
             try:
                 self.relay = MediaRelay()
-                logger.info("✅ WebRTC Manager initialized with aiortc")
+                self.initialized = True
+                logger.info("✅ WebRTC Manager initialized with aiortc and MediaRelay")
             except Exception as e:
                 logger.error(f"❌ Failed to initialize MediaRelay: {e}")
+                self.initialized = True  # Still mark as initialized for fallback mode
         else:
+            self.initialized = True
             logger.info("✅ WebRTC Manager initialized in WebSocket fallback mode")
         
         self.initialized = True
@@ -117,7 +122,13 @@ class WebRTCManager:
     async def _create_webrtc_session(self, session_id: str, offer_sdp: str, offer_type: str) -> Dict:
         """Create a full WebRTC session with aiortc"""
         try:
-            from .video_processor import VideoTransformTrack
+            # Import video processor with better error handling
+            try:
+                from .video_processor import VideoTransformTrack
+            except ImportError as import_error:
+                logger.error(f"❌ Failed to import VideoTransformTrack: {import_error}")
+                logger.error(f"   Make sure inference module __init__.py exists")
+                raise
             
             pc = RTCPeerConnection()
             session = WebRTCSession(
@@ -163,14 +174,26 @@ class WebRTCManager:
                 logger.info(f"📹 Received track: {track.kind}")
                 if track.kind == "video":
                     # Create transform track from incoming video
+                    # If relay is not available, use track directly
+                    subscribed_track = self.relay.subscribe(track) if self.relay else track
                     transform_track = VideoTransformTrack(
-                        track=self.relay.subscribe(track),
+                        track=subscribed_track,
                         session=session
                     )
                     session.video_track = transform_track
                     # Add the processed track to send back to client
                     pc.addTrack(transform_track)
                     logger.info(f"📹 Added transform track to peer connection")
+                elif track.kind == "audio":
+                    # Spawn background task to consume audio frames and feed audio service
+                    logger.info("🔊 Received audio track - starting consumer")
+                    try:
+                        # Use raw track for audio to avoid potential relay ingestion delays/issues
+                        audio_consumer_task = asyncio.create_task(self._consume_audio(track, session))
+                        # store task on session to cancel on cleanup if needed
+                        session.audio_task = audio_consumer_task
+                    except Exception as e:
+                        logger.warning(f"⚠️ Failed to start audio consumer: {e}")
             
             @pc.on("connectionstatechange")
             async def on_connectionstatechange():
@@ -223,6 +246,75 @@ class WebRTCManager:
             return {"success": True}
         except Exception as e:
             return {"error": str(e), "success": False}
+
+    async def _consume_audio(self, track, session: WebRTCSession):
+        """Consume audio frames from an aiortc audio track and feed to audio service."""
+        try:
+            # Resample to 16kHz mono float32 for the model (matching user's working backend.py)
+            resampler = av.AudioResampler(format='flt', layout='mono', rate=16000)
+            
+            # Try to import audio service getter
+            try:
+                # Use absolute import to ensure singleton consistency
+                from services.audio_service import get_audio_processor
+                audio_processor = get_audio_processor()
+                if audio_processor:
+                    logger.info("🔊 Audio processor retrieved successfully in consumer task")
+                else:
+                    logger.warning("🔊 Audio processor NOT INITIALIZED in consumer task")
+            except Exception as e:
+                logger.warning(f"🔊 Failed to get audio processor: {e}")
+                audio_processor = None
+
+            while True:
+                try:
+                    frame = await track.recv()
+                    # Log metadata once per session
+                    if not hasattr(self, '_audio_meta_logged'):
+                        logger.info(f"🔊 Audio Track Meta: rate={frame.sample_rate}, format={frame.format}, channels={len(frame.layout.channels)}")
+                        self._audio_meta_logged = True
+                        
+                    # Heartbeat log every 100 frames (~2 seconds of audio)
+                    if not hasattr(self, '_audio_frame_count'): self._audio_frame_count = 0
+                    self._audio_frame_count += 1
+                    if self._audio_frame_count % 100 == 0:
+                        logger.info(f"🔊 Audio consumer heartbeat: received {self._audio_frame_count} frames")
+                except Exception as e:
+                    logger.info(f"🔊 Audio track ended or recv error: {e}")
+                    break
+
+                # Resample and Convert audio frame to numpy samples if possible
+                try:
+                    # Resample to target format (16kHz, mono, float32)
+                    resampled_frames = resampler.resample(frame)
+                    
+                    for resampled_frame in resampled_frames:
+                        # to_ndarray() returns (channels, samples), for mono it's (1, N)
+                        samples = resampled_frame.to_ndarray()[0].astype('float32')
+
+                        if audio_processor is not None:
+                            # Log sample stats occasionally
+                            if not hasattr(self, '_audio_stats_log'): self._audio_stats_log = 0
+                            import time
+                            if time.time() - self._audio_stats_log > 5:
+                                logger.info(f"🔊 Processing resampled chunk: samples={len(samples)}, max_val={np.max(np.abs(samples)) if len(samples) > 0 else 0:.4f}")
+                                self._audio_stats_log = time.time()
+                            
+                            audio_processor.process_audio_chunk(samples)
+                        else:
+                            # Periodically warn if processor is missing
+                            if not hasattr(self, '_audio_stats_log'): self._audio_stats_log = 0
+                            import time
+                            if time.time() - self._audio_stats_log > 5:
+                                logger.warning("🔊 Skipping audio chunk - processor is None")
+                                self._audio_stats_log = time.time()
+                except Exception as e:
+                    logger.debug(f"🔊 Skipping audio frame conversion: {e}")
+                    continue
+        except Exception as e:
+            logger.error(f"🔊 FATAL error in audio consumer task: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
     
     def get_session(self, session_id: str) -> Optional[WebRTCSession]:
         """Get a session by ID"""

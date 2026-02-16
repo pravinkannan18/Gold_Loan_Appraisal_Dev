@@ -48,11 +48,13 @@ from middleware.rate_limiter import RateLimiter, RateLimitMiddleware
 from middleware.request_validator import RequestValidationMiddleware
 from middleware.logging_middleware import RequestLoggingMiddleware
 from middleware.tenant_context import TenantContextMiddleware
+from services.audio_service import initialize_audio_service
 
 # Import routers
 from routers import (
     appraiser,
     appraisal,
+    audio,
     camera,
     face,
     gps,
@@ -87,6 +89,31 @@ async def lifespan(app: FastAPI):
     camera_service = CameraService()
     facial_service = FacialRecognitionService(db)
     gps_service = GPSService()
+    
+    # Initialize audio service - pick uploaded model if present in ml_models
+    ml_models_dir = os.path.join(os.path.dirname(__file__), "ml_models")
+    audio_model_path = None
+    try:
+        if os.path.isdir(ml_models_dir):
+            # Prefer files containing 'audio' in name, else any .pth/.pt
+            candidates = [f for f in os.listdir(ml_models_dir) if f.lower().endswith(('.pth', '.pt'))]
+            audio_candidates = [f for f in candidates if 'audio' in f.lower()]
+            use_file = None
+            if audio_candidates:
+                use_file = audio_candidates[0]
+            elif candidates:
+                use_file = candidates[0]
+
+            if use_file:
+                audio_model_path = os.path.join(ml_models_dir, use_file)
+                logger.info(f"🔍 Using audio model: {audio_model_path}")
+    except Exception as e:
+        logger.warning(f"Failed to locate audio model in ml_models: {e}")
+
+    logger.info(f"🔍 Final Audio Model Path chosen: {audio_model_path}")
+    initialize_audio_service(model_path=audio_model_path)
+    logger.info("✅ Audio service initialized")
+    
     logger.info("✅ Services initialized")
     
     # Initialize WebRTC
@@ -145,7 +172,7 @@ setup_exception_handlers(app)
 # ============================================================================
 
 # 1. CORS (outermost - must be first to handle preflight)
-allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:8080,http://localhost:3000,http://localhost:5173").split(",")
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:8080,http://localhost:8081,http://localhost:3000,http://localhost:5173").split(",")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
@@ -196,6 +223,7 @@ gps_service = None
 
 app.include_router(appraiser.router)
 app.include_router(appraisal.router)
+app.include_router(audio.router)
 app.include_router(session.router)
 app.include_router(camera.router)
 app.include_router(face.router)

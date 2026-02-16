@@ -14,6 +14,7 @@ export interface WebRTCSession {
     mode: 'webrtc' | 'websocket';
     peerConnection?: RTCPeerConnection;
     websocket?: WebSocket;
+    dataChannel?: RTCDataChannel;
     localStream: MediaStream | null;
     remoteStream: MediaStream | null;
 }
@@ -88,25 +89,25 @@ export class WebRTCService {
     ): Promise<WebRTCSession> {
         try {
             // Get camera stream with optimized constraints for low latency
+            // Include selected audio device if saved in settings
+            const savedAudioDevice = localStorage.getItem('audio_input_device');
+            const audioConstraint: any = savedAudioDevice ? { deviceId: { exact: savedAudioDevice } } : true;
+
             const constraints: MediaStreamConstraints = {
                 video: cameraId
                     ? {
                         deviceId: { exact: cameraId },
-                        width: { ideal: 3840, min: 1280 },
-                        height: { ideal: 2160, min: 720 },
-                        aspectRatio: { ideal: 16/9 },
-                        frameRate: { ideal: 15, max: 30 }
+                        width: { max: 640, ideal: 640 },
+                        height: { max: 480, ideal: 480 }
                     }
                     : {
-                        width: { ideal: 3840, min: 1280 },
-                        height: { ideal: 2160, min: 720 },
-                        aspectRatio: { ideal: 16/9 },
-                        frameRate: { ideal: 15, max: 30 }
+                        width: { max: 640, ideal: 640 },
+                        height: { max: 480, ideal: 480 }
                     },
-                audio: false
+                audio: audioConstraint
             };
 
-            const localStream = await navigator.mediaDevices.getUserMedia(constraints);
+            const localStream = await this.getCamStream(constraints);
 
             // Display local stream
             if (videoElement) {
@@ -261,25 +262,24 @@ export class WebRTCService {
     ): Promise<WebRTCSession> {
         try {
             // Optimized constraints for low latency
+            const savedAudioDevice = localStorage.getItem('audio_input_device');
+            const audioConstraint: any = savedAudioDevice ? { deviceId: { exact: savedAudioDevice } } : true;
+
             const constraints: MediaStreamConstraints = {
                 video: cameraId
                     ? {
                         deviceId: { exact: cameraId },
-                        width: { ideal: 3840, min: 1280 },
-                        height: { ideal: 2160, min: 720 },
-                        aspectRatio: { ideal: 16/9 },
-                        frameRate: { ideal: 15, max: 30 }
+                        width: { max: 640, ideal: 640 },
+                        height: { max: 480, ideal: 480 }
                     }
                     : {
-                        width: { ideal: 3840, min: 1280 },
-                        height: { ideal: 2160, min: 720 },
-                        aspectRatio: { ideal: 16/9 },
-                        frameRate: { ideal: 15, max: 30 }
+                        width: { max: 640, ideal: 640 },
+                        height: { max: 480, ideal: 480 }
                     },
-                audio: false
+                audio: audioConstraint
             };
 
-            const localStream = await navigator.mediaDevices.getUserMedia(constraints);
+            const localStream = await this.getCamStream(constraints);
 
             if (videoElement) {
                 videoElement.srcObject = localStream;
@@ -379,8 +379,13 @@ export class WebRTCService {
                 }
             };
 
-            statusChannel.onerror = (error) => {
-                console.error('📡 Data channel error:', error);
+            statusChannel.onerror = (event: any) => {
+                // Ignore errors during closing/closed state or benign OperationErrors
+                if (statusChannel.readyState === 'closing' || statusChannel.readyState === 'closed'
+                    || (event.error && event.error.name === 'OperationError')) {
+                    return;
+                }
+                console.error('📡 Data channel error:', event);
             };
 
             const offer = await pc.createOffer();
@@ -398,7 +403,15 @@ export class WebRTCService {
             });
 
             const result = await response.json();
+
+            // Handle non-200 responses
+            if (!response.ok) {
+                console.error('❌ WebRTC offer failed:', response.status, result);
+                throw new Error(result.detail || result.error || `Failed to create session (HTTP ${response.status})`);
+            }
+
             if (!result.success) {
+                console.error('❌ WebRTC session creation failed:', result);
                 throw new Error(result.error || 'Failed to create session');
             }
 
@@ -412,6 +425,7 @@ export class WebRTCService {
                 sessionId: result.session_id,
                 mode: 'webrtc',
                 peerConnection: pc,
+                dataChannel: statusChannel,
                 localStream,
                 remoteStream
             };
@@ -562,9 +576,25 @@ export class WebRTCService {
             }
         }
 
+        // Close data channel
+        if (sessionToCleanup.dataChannel) {
+            try {
+                // Prevent error logging during intentional close
+                sessionToCleanup.dataChannel.onerror = null;
+                sessionToCleanup.dataChannel.onclose = null;
+                sessionToCleanup.dataChannel.close();
+            } catch {
+                // Ignore
+            }
+        }
+
         // Close peer connection
         if (sessionToCleanup.peerConnection) {
             try {
+                // Prevent error logging during intentional close
+                sessionToCleanup.peerConnection.onconnectionstatechange = null;
+                sessionToCleanup.peerConnection.onicecandidate = null;
+                sessionToCleanup.peerConnection.ontrack = null;
                 sessionToCleanup.peerConnection.close();
             } catch {
                 // Ignore
@@ -606,6 +636,33 @@ export class WebRTCService {
 
     getMode(): 'webrtc' | 'websocket' | null {
         return this.session?.mode || null;
+    }
+
+    /**
+     * Robust getUserMedia with fallback for OverconstrainedError
+     */
+    private async getCamStream(constraints: MediaStreamConstraints): Promise<MediaStream> {
+        try {
+            return await navigator.mediaDevices.getUserMedia(constraints);
+        } catch (error: any) {
+            if (error.name === 'OverconstrainedError' || error.name === 'ConstraintNotSatisfiedError') {
+                console.warn('⚠️ Constraints failed (likely deviceId or resolution), retrying with defaults...', error);
+
+                // Fallback 1: Try relaxed resolution but keep deviceId if possible? 
+                // No, usually deviceId is the culprit if it changed.
+                // Let's try completely generic first to ensure it Works.
+                try {
+                    return await navigator.mediaDevices.getUserMedia({
+                        video: true,
+                        audio: !!constraints.audio
+                    });
+                } catch (retryError) {
+                    console.error('❌ Fallback GUM failed:', retryError);
+                    throw error; // Throw original error if fallback fails
+                }
+            }
+            throw error;
+        }
     }
 }
 

@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+// React hooks already imported above
 import { Camera, Settings, Check, X, RefreshCw, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useCameraDetection, CameraContext, CameraDevice } from '@/hooks/useCameraDetection';
 import { showToast } from '@/lib/utils';
+import { useState, useEffect } from 'react';
 
 interface PageCameraConfig {
     context: CameraContext;
@@ -26,6 +27,8 @@ export function CameraSettings() {
 
     const [pageConfigs, setPageConfigs] = useState<PageCameraConfig[]>([]);
     const [testingCamera, setTestingCamera] = useState<string | null>(null);
+    const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
+    const [selectedAudioDevice, setSelectedAudioDevice] = useState<string | null>(localStorage.getItem('audio_input_device'));
 
     // Load all saved cameras
     useEffect(() => {
@@ -62,6 +65,35 @@ export function CameraSettings() {
             setPageConfigs(configs);
         }
     }, [cameras, getAllSavedCameras]);
+
+    // Enumerate audio input devices
+    useEffect(() => {
+        const enumAudio = async () => {
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const inputs = devices.filter(d => d.kind === 'audioinput');
+                setAudioDevices(inputs);
+            } catch (err) {
+                console.warn('Failed to enumerate audio devices', err);
+                setAudioDevices([]);
+            }
+        };
+        enumAudio();
+        navigator.mediaDevices.addEventListener('devicechange', enumAudio);
+        return () => navigator.mediaDevices.removeEventListener('devicechange', enumAudio);
+    }, []);
+
+    const handleSaveAudioDevice = (deviceId: string | null) => {
+        if (deviceId) {
+            localStorage.setItem('audio_input_device', deviceId);
+            setSelectedAudioDevice(deviceId);
+            showToast('✅ Audio input device saved', 'success');
+        } else {
+            localStorage.removeItem('audio_input_device');
+            setSelectedAudioDevice(null);
+            showToast('🗑️ Audio input cleared', 'info');
+        }
+    };
 
     const handleCameraChange = (context: CameraContext, deviceId: string) => {
         const camera = cameras.find(c => c.deviceId === deviceId) || null;
@@ -318,6 +350,31 @@ export function CameraSettings() {
                     </ul>
                 </div>
             </div>
+
+                {/* Audio Input Selection */}
+                <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-6 mt-6">
+                    <h2 className="text-lg font-bold text-gray-900 mb-4">Audio Input Device</h2>
+
+                    {audioDevices.length === 0 ? (
+                        <div className="text-sm text-gray-600">No audio input devices detected. Connect a microphone and refresh.</div>
+                    ) : (
+                        <div className="flex items-center gap-3">
+                            <select
+                                value={selectedAudioDevice || ''}
+                                onChange={(e) => setSelectedAudioDevice(e.target.value || null)}
+                                className="p-2 border rounded w-full"
+                            >
+                                <option value="">Default device</option>
+                                {audioDevices.map((d) => (
+                                    <option key={d.deviceId} value={d.deviceId}>{d.label || d.deviceId}</option>
+                                ))}
+                            </select>
+                            <Button onClick={() => handleSaveAudioDevice(selectedAudioDevice)}>
+                                Save
+                            </Button>
+                        </div>
+                    )}
+                </div>
         </div>
     );
 }

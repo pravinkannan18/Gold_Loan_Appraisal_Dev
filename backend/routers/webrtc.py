@@ -50,9 +50,13 @@ async def create_offer(offer: SDPOffer):
     result = await webrtc_manager.create_session(offer.sdp, offer.type)
     
     if not result.get("success"):
+        # Ensure we return a string detail for HTTPException
+        err = result.get("error", "Failed to create session")
+        if isinstance(err, dict):
+            err = str(err)
         raise HTTPException(
             status_code=500,
-            detail=result.get("error", "Failed to create session")
+            detail=err
         )
     
     return result

@@ -1,8 +1,18 @@
 """Facial Recognition API routes"""
 from fastapi import APIRouter, Form, HTTPException
+from pydantic import BaseModel
+from typing import Optional
 import traceback
 
 router = APIRouter(prefix="/api/face", tags=["facial-recognition"])
+
+class FaceIdentifyRequest(BaseModel):
+    """Request model for facial identification"""
+    image: str
+    appraiser_id: Optional[str] = None
+    name: Optional[str] = None
+    bank_id: Optional[int] = None
+    branch_id: Optional[int] = None
 
 # Dependency injection
 facial_service = None
@@ -49,13 +59,7 @@ async def recognize_face(image: str = Form(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/identify")
-async def identify_appraiser(
-    image: str = Form(...),
-    appraiser_id: str = Form(None),
-    name: str = Form(None), 
-    bank_id: str = Form(None),
-    branch_id: str = Form(None)
-):
+async def identify_appraiser(request: FaceIdentifyRequest):
     """Identify a specific appraiser by comparing with their registered face in specific bank/branch"""
     try:
         if facial_service is None:
@@ -63,11 +67,11 @@ async def identify_appraiser(
         
         # Use the specific identify method for bank/branch context
         result = facial_service.identify_appraiser(
-            image=image,
-            expected_appraiser_id=appraiser_id,
-            expected_name=name,
-            bank_id=bank_id,
-            branch_id=branch_id
+            image=request.image,
+            expected_appraiser_id=request.appraiser_id,
+            expected_name=request.name,
+            bank_id=request.bank_id,
+            branch_id=request.branch_id
         )
         return result
     except HTTPException:

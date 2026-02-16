@@ -282,28 +282,17 @@ class InferenceWorker:
             if roi.size and np.any(roi > 0):
                 visual_ok = True
         
-        # Update detection result
-        detection_result["rubbing_detected"] = rubbing
-        
-        # Handle rubbing confirmation
+        # Provide detailed detection flags to caller; do NOT auto-confirm stage here
+        detection_result["rubbing_motion"] = rubbing
+        detection_result["visual_ok"] = visual_ok
         if visual_ok:
             self.visual_confirm_count += 1
-            if self.visual_confirm_count >= 3 and not self.rubbing_confirmed:
-                self.rubbing_confirmed = True
-                self.stage = "ACID"
-                detection_result["rubbing_detected"] = True
-                detection_result["stage"] = "ACID"
-                self.detection_status.update({
-                    "message": "Rubbing confirmed! Proceed to acid test.",
-                    "stage": "ACID",
-                    "rubbing_confirmed": True
-                })
-                        # large confirmation text intentionally removed from frame drawing
-                        # message is set in detection_status and will be rendered by the
-                        # video processor overlay to keep text sizing consistent
-            elif self.RENDER_TEXT and not self.rubbing_confirmed:
-                # update message so overlay can render it consistently
-                self.detection_status["message"] = f"Visual confirmations: {self.visual_confirm_count}/3"
+        # expose visual confirmation count so caller (video processor) can combine with audio
+        detection_result["visual_confirm_count"] = self.visual_confirm_count
+
+        # Update user-facing message for visual confirmations only (no stage change here)
+        if self.RENDER_TEXT and not self.rubbing_confirmed:
+            self.detection_status["message"] = f"Visual confirmations: {self.visual_confirm_count}/3"
         
         # Set status message (rendered by video processor overlay for consistent sizing)
         if self.RENDER_TEXT:
